@@ -149,6 +149,14 @@ pub(super) fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(),
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        // zip 2.x `enclosed_name` rejected rooted/drive-prefixed names; 9.x silently
+        // strips a leading root. Keep rejecting them.
+        if zip_entry_name_is_rooted(entry.name_raw()) {
+            return Err(format!(
+                "unsafe zip entry: {}",
+                String::from_utf8_lossy(entry.name_raw())
+            ));
+        }
         let name = entry
             .enclosed_name()
             .map(|p| p.to_path_buf())
@@ -178,6 +186,13 @@ pub(super) fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(),
         io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// True when a raw zip entry name is absolute: a leading `/` or `\\`, or a
+/// `X:` drive prefix.
+fn zip_entry_name_is_rooted(raw: &[u8]) -> bool {
+    matches!(raw.first(), Some(b'/') | Some(b'\\'))
+        || (raw.len() >= 2 && raw[0].is_ascii_alphabetic() && raw[1] == b':')
 }
 
 pub(super) fn extract_tar<R: Read>(reader: R, destination: &Path) -> Result<(), String> {

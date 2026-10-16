@@ -515,9 +515,12 @@ fn zip_extraction_rejects_symlink_entries() {
     {
         let file = File::create(&archive).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default().unix_permissions(0o120777);
-        zip.start_file("link", options).unwrap();
-        zip.write_all(b"/etc/passwd").unwrap();
+        zip.add_symlink(
+            "link",
+            "/etc/passwd",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         zip.finish().unwrap();
     }
     let out = dir.path().join("extract");
