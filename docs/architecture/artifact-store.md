@@ -590,10 +590,59 @@ or allowlisted in the guard:
 | rust-plan restore (`rust_plan/local.rs`) | routed: `recorded_mtime_or_now` + `stamp_mtime` | the manifest's recorded object mtime, `now()` when the manifest has `0` |
 | directory-bundle restore | routed: `stamp_recorded_mtime` | the recorded entry timestamp |
 | `mtime_replay` (#1595) | allowlisted | restores workspace *source* files, not outputs |
+| `pch_inputs` (#1952) | allowlisted | sets a content-verified PCH input *header* back to the mtime the cached PCH recorded |
 | `snapshot_fp` | allowlisted | bumps existing cargo fingerprint stamp files in place |
 | `retired_store` | allowlisted | `.last-active` liveness marker |
 
 Benches, tests and `zccache-test-support` are not production writers and are not
-scanned. `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
+scanned.
+
+### Strict PCH serving (#1952)
+
+A clang PCH records each input header's spelling, size, mtime (seconds) and an
+xxh3 content hash (`INPUT_FILE` / `INPUT_FILE_HASH`). A consumer rejects the PCH
+on a size or mtime mismatch, and even when
+`-fpch-validate-input-files-content` forgives an mtime mismatch on identical
+content, clang's `#pragma once` lookup still keys on (size, mtime): the header
+is parsed twice and the consumer fails with `redefinition of ...`. A content
+key alone is therefore not enough to serve a PCH; the workspace must match the
+record exactly. zccache never asks for `-fno-pch-timestamp` and never patches
+PCH bytes.
+
+PCH generation (output `*.pch` / `*.gch`) is its own artifact kind:
+
+- **Key.** Worktree-salted as before (#474/#489), plus the exact argv (order and
+  spelling) and cwd, because the PCH embeds the spellings its inputs resolved
+  through.
+- **Gate on every hit** (`handle_compile/pch_gate.rs`, records parsed by
+  `zccache-fingerprint/src/pch_inputs`). Before the PCH is materialized, its
+  records are read from the cached PCH itself (only the head of the file) and
+  checked against the workspace:
+
+  | Recorded input | Result |
+  |---|---|
+  | missing / not a file / relative | miss |
+  | size differs | miss (checked before hashing) |
+  | content xxh3 differs | miss |
+  | the PCH's top-level header is another file (another checkout) | miss |
+  | content identical, mtime differs | set the header's mtime to the recorded value, then serve |
+  | same, but the header is outside the request's key root, no hash was recorded, or replay is off | miss |
+
+  A miss falls through to a normal compile, which rebuilds the PCH. When the
+  refusal was mtime-only (replay off, or an input outside the root), the
+  rebuilt PCH has the same key but different bytes, so publication evicts the
+  key (#1244) and the following build stores it fresh. Each replayed mtime is logged (`[PCH_MTIME_REPLAY] <path> mtime
+  <old> -> <recorded>`) and refusals are logged as `[PCH_REFUSED]`. After
+  setting the mtime the header is re-read; if it changed in between, its mtime
+  is set to now and the hit is refused, so a concurrent edit always rebuilds.
+- **Atomicity.** The gate and the PCH write run under one daemon-wide lock
+  inside the compile request, so the replay and the PCH land before the
+  compile returns and no consumer can start in between.
+- **PCH mtime.** The PCH itself takes the `NativeFreshHit` batch floor
+  (`now()`), so it is never older than its (replayed) inputs.
+- **Control.** `ZCCACHE_PCH_MTIME_REPLAY` (per request, from the client env) is on
+  by default; `0`, `false`, `off` or `no` turn replay off, and a touched header
+  then rebuilds the PCH instead.
+ `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
 visible to the guard); it unpacks a downloaded symbol archive, not a cache
 output.

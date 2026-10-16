@@ -41,6 +41,7 @@ failed cache-root audit retain its diagnostic JSONL evidence.
 - **Transactional directory outputs** → [artifact-store.md](architecture/artifact-store.md#immutable-staged-output-rollout)
 - **Reflink / hardlink COW safety** → [artifact-store.md](architecture/artifact-store.md#capability-driven-cow-materialization)
 - **`ZCCACHE_MODE` delivery modes (AUTO/LINK/COPY/REFLINK)** → [artifact-store.md](architecture/artifact-store.md#materialization-mode-zccache_mode-1683)
+- **Strict PCH serving, `ZCCACHE_PCH_MTIME_REPLAY`** → [artifact-store.md](architecture/artifact-store.md#strict-pch-serving-1952)
 - **soldr target artifact contract** → [rust-artifact-plan.md](architecture/rust-artifact-plan.md)
 - **Embedded soldr/fbuild service integration** → [embedded-service.md](architecture/embedded-service.md)
 - **Shared embedded host-work admission** → [embedded-service.md § Shared host-work admission](architecture/embedded-service.md#shared-host-work-admission)

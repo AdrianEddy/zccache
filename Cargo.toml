@@ -53,6 +53,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 bincode = "1"
 thiserror = "2"
 tracing = "0.1"
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
 dashmap = "6"
