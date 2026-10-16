@@ -14,6 +14,7 @@
 //! so only the head of the file is ever read.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use super::{PchInput, PchInputsError};
 
@@ -481,25 +482,45 @@ fn decode_import_record(
         let path = String::from_utf8_lossy(&blob[blob.len() - path_len..]).into_owned();
         return push(kind, size, mtime, path);
     }
-    const SIGNATURE_WORDS: usize = 20;
-    let mut cursor = OpCursor {
-        ops: &record.ops,
-        at: 0,
-    };
+    // Layout variants seen across clang releases (and vendor forks): with or
+    // without the standard-C++-module flag, and a 20-byte or 5-word
+    // signature. Take the first one that consumes the record exactly; if none
+    // does, the record is not understood and the PCH is refused.
+    for (has_cxx_flag, signature_words) in [(true, 20), (false, 20), (true, 5), (false, 5)] {
+        if let Ok(imports) = decode_legacy_imports(&record.ops, has_cxx_flag, signature_words) {
+            for (kind, size, mtime, path) in imports {
+                push(kind, size, mtime, path)?;
+            }
+            return Ok(());
+        }
+    }
+    Err(malformed("unsupported IMPORTS record layout"))
+}
+
+fn decode_legacy_imports(
+    ops: &[u64],
+    has_cxx_flag: bool,
+    signature_words: usize,
+) -> Result<Vec<(u64, u64, u64, String)>, PchInputsError> {
+    let mut cursor = OpCursor { ops, at: 0 };
+    let mut imports = Vec::new();
     while !cursor.done() {
         let kind = cursor.one()?;
-        if cursor.one()? != 0 {
+        if has_cxx_flag && cursor.one()? != 0 {
             return Err(malformed("imported AST file is a C++20 module"));
         }
         let _import_loc = cursor.one()?;
         let size = cursor.one()?;
         let mtime = cursor.one()?;
-        cursor.take(SIGNATURE_WORDS)?;
+        cursor.take(signature_words)?;
         let _module_name = cursor.string()?;
         let path = cursor.string()?;
-        push(kind, size, mtime, path)?;
+        if !Path::new(&path).is_absolute() {
+            return Err(malformed("IMPORTS path is not absolute"));
+        }
+        imports.push((kind, size, mtime, path));
     }
-    Ok(())
+    Ok(imports)
 }
 
 /// Sequential reader over an unabbreviated record's operands.
