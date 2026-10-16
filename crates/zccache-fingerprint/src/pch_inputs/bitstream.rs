@@ -422,6 +422,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Option<Vec<PchInput>>, PchInputsErro
                     &mut on_block,
                     &mut on_record,
                 )?;
+                if let Some(error) = decode_error.take() {
+                    return Err(error);
+                }
                 if !saw_input_files {
                     return Err(malformed("CONTROL_BLOCK has no INPUT_FILES_BLOCK"));
                 }
@@ -438,39 +441,105 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Option<Vec<PchInput>>, PchInputsErro
 
 /// An imported PCH (`-include-pch` while building a chained PCH). clang
 /// checks the imported file's size and mtime against this record, so it is
-/// validated like an input. Layout (clang >= 19): kind, standard C++ module,
-/// import location, module-name length, size, mtime, path length; the blob
-/// ends with the path.
+/// validated like an input.
+///
+/// clang >= 20 writes one abbreviated `IMPORT` per file: kind, standard C++
+/// module, import location, module-name length, size, mtime, path length,
+/// with the path at the end of the blob. clang 17-19 write one unabbreviated
+/// `IMPORTS` record listing every import as kind, standard C++ module, import
+/// location, size, mtime, 20 signature words, then the module name and the
+/// path as length-prefixed strings.
 fn decode_import_record(
     inputs: &mut Vec<PchInput>,
     record: &Record<'_>,
 ) -> Result<(), PchInputsError> {
-    let [kind, _, _, _, size, mtime, path_len] = record.ops[..] else {
-        return Err(malformed("unsupported IMPORT record layout"));
+    let mut push = |kind: u64, size: u64, mtime: u64, path: String| {
+        if kind != MODULE_KIND_PCH {
+            return Err(malformed("imported AST file is not a PCH"));
+        }
+        inputs.push(PchInput {
+            as_requested: path.clone(),
+            path,
+            size,
+            mtime_secs: mtime,
+            content_xxh3: None,
+            overridden: false,
+            transient: false,
+            top_level: false,
+            imported_pch: true,
+        });
+        Ok(())
     };
-    if kind != MODULE_KIND_PCH {
-        return Err(malformed("imported AST file is not a PCH"));
+    if let Some(blob) = record.blob {
+        let [kind, _, _, _, size, mtime, path_len] = record.ops[..] else {
+            return Err(malformed("unsupported IMPORT record layout"));
+        };
+        let path_len = usize::try_from(path_len)
+            .ok()
+            .filter(|len| *len <= blob.len())
+            .ok_or_else(|| malformed("IMPORT path length exceeds its blob"))?;
+        let path = String::from_utf8_lossy(&blob[blob.len() - path_len..]).into_owned();
+        return push(kind, size, mtime, path);
     }
-    let blob = record
-        .blob
-        .ok_or_else(|| malformed("IMPORT record has no path blob"))?;
-    let path_len = usize::try_from(path_len)
-        .ok()
-        .filter(|len| *len <= blob.len())
-        .ok_or_else(|| malformed("IMPORT path length exceeds its blob"))?;
-    let path = String::from_utf8_lossy(&blob[blob.len() - path_len..]).into_owned();
-    inputs.push(PchInput {
-        as_requested: path.clone(),
-        path,
-        size,
-        mtime_secs: mtime,
-        content_xxh3: None,
-        overridden: false,
-        transient: false,
-        top_level: false,
-        imported_pch: true,
-    });
+    const SIGNATURE_WORDS: usize = 20;
+    let mut cursor = OpCursor {
+        ops: &record.ops,
+        at: 0,
+    };
+    while !cursor.done() {
+        let kind = cursor.one()?;
+        if cursor.one()? != 0 {
+            return Err(malformed("imported AST file is a C++20 module"));
+        }
+        let _import_loc = cursor.one()?;
+        let size = cursor.one()?;
+        let mtime = cursor.one()?;
+        cursor.take(SIGNATURE_WORDS)?;
+        let _module_name = cursor.string()?;
+        let path = cursor.string()?;
+        push(kind, size, mtime, path)?;
+    }
     Ok(())
+}
+
+/// Sequential reader over an unabbreviated record's operands.
+struct OpCursor<'a> {
+    ops: &'a [u64],
+    at: usize,
+}
+
+impl<'a> OpCursor<'a> {
+    fn done(&self) -> bool {
+        self.at >= self.ops.len()
+    }
+
+    fn take(&mut self, count: usize) -> Result<&'a [u64], PchInputsError> {
+        let end = self
+            .at
+            .checked_add(count)
+            .ok_or_else(|| malformed("IMPORTS record is truncated"))?;
+        let slice = self
+            .ops
+            .get(self.at..end)
+            .ok_or_else(|| malformed("IMPORTS record is truncated"))?;
+        self.at = end;
+        Ok(slice)
+    }
+
+    fn one(&mut self) -> Result<u64, PchInputsError> {
+        Ok(self.take(1)?[0])
+    }
+
+    /// clang's `AddString`: a length, then one operand per byte.
+    fn string(&mut self) -> Result<String, PchInputsError> {
+        let len = usize::try_from(self.one()?).map_err(|_| malformed("IMPORTS string length"))?;
+        let bytes = self
+            .take(len)?
+            .iter()
+            .map(|op| u8::try_from(*op).map_err(|_| malformed("IMPORTS string byte")))
+            .collect::<Result<Vec<u8>, _>>()?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 fn decode_input_record(

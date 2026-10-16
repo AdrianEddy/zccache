@@ -628,6 +628,15 @@ PCH generation (output `*.pch` / `*.gch`) is its own artifact kind:
   | content identical, mtime differs | set the header's mtime to the recorded value, then serve |
   | same, but the header is outside the request's key root, no hash was recorded, or replay is off | miss |
 
+  Content is verified against `INPUT_FILE_HASH`, which clang >= 19 writes as
+  xxh3-64. clang 18 and older write an `llvm::hash_code` that cannot be
+  recomputed. A PCH whose hashes match no input under xxh3 is treated as
+  unverifiable: unchanged inputs still serve, and an mtime-only mismatch is a
+  miss, never a replay. Chained PCHs record their base PCH in `IMPORT`
+  (clang >= 20) or `IMPORTS` (clang 17-19). The base is checked by size and
+  mtime, and its mtime is replayed like a header's. Its bytes are already in
+  the consumer's cache key.
+
   A miss falls through to a normal compile, which rebuilds the PCH. When the
   refusal was mtime-only (replay off, or an input outside the root), the
   rebuilt PCH has the same key but different bytes, so publication evicts the

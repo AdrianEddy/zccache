@@ -33,9 +33,10 @@
 mod bitstream;
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kernal_api::platform::fs::FileTime;
+use zccache_core::NormalizedPath;
 
 /// One `INPUT_FILE` record of a clang PCH, with its `INPUT_FILE_HASH`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,7 +49,8 @@ pub struct PchInput {
     pub size: u64,
     /// Modification time (whole seconds since the epoch) clang recorded.
     pub mtime_secs: u64,
-    /// xxh3-64 of the content, when clang recorded one.
+    /// The recorded content hash, when clang recorded one: xxh3-64 for
+    /// clang >= 19, an unrecomputable `llvm::hash_code` before that.
     pub content_xxh3: Option<u64>,
     /// The input was a virtual (remapped) buffer, not a file on disk.
     pub overridden: bool,
@@ -118,7 +120,8 @@ pub enum PchRefusalReason {
     SizeMismatch { recorded: u64, actual: u64 },
     /// The input's content hash differs from the record.
     ContentMismatch,
-    /// The mtime differs and clang recorded no content hash to verify.
+    /// The mtime differs and the content cannot be verified: clang recorded
+    /// no hash, or (clang < 19) a hash that is not xxh3.
     MtimeUnverifiable,
     /// The mtime differs, content matches, but replay is turned off.
     ReplayDisabled,
@@ -172,7 +175,7 @@ impl std::fmt::Display for PchRefusal {
 /// An input whose content verified but whose mtime must be set back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingReplay {
-    pub path: PathBuf,
+    pub path: NormalizedPath,
     /// The mtime clang recorded, which the file will be given.
     pub recorded_secs: u64,
     /// The mtime the file had when it was verified.
@@ -242,12 +245,12 @@ pub fn plan_pch_serve(
             });
         }
     }
-    let mut plan = PchServePlan::default();
+    // Pass 1: existence, size, and the content hash of every input.
+    let mut checked = Vec::new();
     for input in inputs {
         if input.overridden || input.transient {
             continue;
         }
-        plan.inputs_checked += 1;
         let path = Path::new(&input.path);
         if !path.is_absolute() {
             return Err(refuse(input, PchRefusalReason::RelativePath));
@@ -265,22 +268,44 @@ pub fn plan_pch_serve(
                 },
             ));
         }
-        let current_secs = mtime_secs(&meta);
-        // clang skips the timestamp check for a zero recorded mtime.
-        let mtime_matches =
-            input.mtime_secs == 0 || u64::try_from(current_secs).ok() == Some(input.mtime_secs);
-        let recorded_hash = match input.content_xxh3 {
-            Some(recorded_hash) => {
+        let xxh3_matches = match input.content_xxh3 {
+            Some(recorded) => {
                 let bytes = std::fs::read(path).map_err(|error| {
                     refuse(input, PchRefusalReason::Unreadable(error.to_string()))
                 })?;
-                if content_xxh3(&bytes) != recorded_hash {
-                    return Err(refuse(input, PchRefusalReason::ContentMismatch));
-                }
-                Some(recorded_hash)
+                Some(content_xxh3(&bytes) == recorded)
             }
-            None if mtime_matches || input.imported_pch => None,
-            None => return Err(refuse(input, PchRefusalReason::MtimeUnverifiable)),
+            None => None,
+        };
+        checked.push((input, mtime_secs(&meta), xxh3_matches));
+    }
+    // clang >= 19 stores xxh3-64 in INPUT_FILE_HASH; older clang stores an
+    // `llvm::hash_code`, which cannot be recomputed here. One matching input
+    // proves the PCH uses xxh3 (a 64-bit coincidence is negligible), so every
+    // mismatch is then a real content change. Otherwise the hashes are
+    // unusable: inputs fall back to clang's own size + mtime check and an
+    // mtime mismatch cannot be verified, so it is refused (never replayed).
+    let hashes_are_xxh3 = checked.iter().any(|(_, _, matches)| *matches == Some(true));
+
+    // Pass 2: decide each input.
+    let mut plan = PchServePlan {
+        inputs_checked: checked.len(),
+        replays: Vec::new(),
+    };
+    for (input, current_secs, xxh3_matches) in checked {
+        // clang skips the timestamp check for a zero recorded mtime.
+        let mtime_matches =
+            input.mtime_secs == 0 || u64::try_from(current_secs).ok() == Some(input.mtime_secs);
+        let verified_hash = match (xxh3_matches, hashes_are_xxh3) {
+            (Some(false), true) => {
+                return Err(refuse(input, PchRefusalReason::ContentMismatch));
+            }
+            (Some(true), true) => input.content_xxh3,
+            _ if mtime_matches => None,
+            // An imported PCH has no content hash; its bytes are part of
+            // the cache key, which hashes PCH dependencies on every lookup.
+            (None, _) if input.imported_pch => None,
+            _ => return Err(refuse(input, PchRefusalReason::MtimeUnverifiable)),
         };
         if mtime_matches {
             continue;
@@ -288,15 +313,16 @@ pub fn plan_pch_serve(
         if !options.replay_enabled {
             return Err(refuse(input, PchRefusalReason::ReplayDisabled));
         }
+        let path = Path::new(&input.path);
         if !path.starts_with(options.replay_root) {
             return Err(refuse(input, PchRefusalReason::OutsideReplayRoot));
         }
         plan.replays.push(PendingReplay {
-            path: path.to_path_buf(),
+            path: NormalizedPath::new(path),
             recorded_secs: input.mtime_secs,
             current_secs,
             size: input.size,
-            content_xxh3: recorded_hash,
+            content_xxh3: verified_hash,
         });
     }
     Ok(plan)
@@ -334,7 +360,13 @@ fn apply_pch_replay_with(
         if !unchanged {
             // Bias toward rebuilding: whatever changed must look newer than
             // every output built from the old content.
-            let _ = set_time(&replay.path, FileTime::now());
+            if let Err(error) = set_time(&replay.path, FileTime::now()) {
+                tracing::warn!(
+                    path = %replay.path.display(),
+                    %error,
+                    "could not mark a PCH input changed during replay as new"
+                );
+            }
             return Err(refusal(replay, PchRefusalReason::ChangedDuringReplay));
         }
     }

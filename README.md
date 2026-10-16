@@ -853,7 +853,9 @@ byte-identical but its mtime moved (a checkout, `git stash`, an editor save),
 zccache sets that header's mtime back to the value the PCH recorded and logs
 it, because clang's `#pragma once` lookup would otherwise parse the header
 twice (`redefinition of ...`). Only headers under the build's checkout root are
-touched. Set `ZCCACHE_PCH_MTIME_REPLAY=0` to rebuild the PCH instead. Details:
+touched, and only with clang >= 19, which records xxh3 content hashes; older
+clang rebuilds instead. Set `ZCCACHE_PCH_MTIME_REPLAY=0` to rebuild the PCH
+instead. Details:
 [artifact-store.md](docs/architecture/artifact-store.md#strict-pch-serving-1952).
 
 ### Compiler child priority

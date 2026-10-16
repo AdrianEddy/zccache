@@ -27,6 +27,16 @@ use kernal_api::platform::fs::{set_file_mtime, FileTime};
 use zccache::daemon::DaemonServer;
 use zccache::protocol::{Request, Response};
 
+/// `canonicalize` without Windows' `\\?\` verbatim prefix, which clang
+/// never records.
+fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let path = std::fs::canonicalize(path)?;
+    let text = path.to_string_lossy();
+    Ok(text
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| path.clone(), PathBuf::from))
+}
+
 #[cfg(unix)]
 type ClientConn = zccache::ipc::IpcConnection;
 #[cfg(windows)]
@@ -80,7 +90,7 @@ struct Checkout {
 impl Checkout {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let root = canonical(dir.path()).unwrap();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::create_dir_all(root.join("inc")).unwrap();
         std::fs::create_dir_all(root.join("build")).unwrap();
@@ -278,6 +288,23 @@ async fn cold_build(clang: &Path) -> (Checkout, Daemon, ClientConn, String, Vec<
     (checkout, daemon, client, sid, bytes)
 }
 
+/// Whether this clang records xxh3 input hashes (clang >= 19). Older clang
+/// stores an `llvm::hash_code`, so zccache cannot verify content and never
+/// replays; the content-verified cases below then do not apply.
+fn records_xxh3(checkout: &Checkout, pch_bytes: &[u8]) -> bool {
+    use zccache::fingerprint::pch_inputs::{content_xxh3, parse_pch_inputs};
+    let header = checkout.root.join("pch.h");
+    let inputs = parse_pch_inputs(pch_bytes).unwrap().unwrap();
+    let Some(record) = inputs.iter().find(|input| Path::new(&input.path) == header) else {
+        return false;
+    };
+    let xxh3 = record.content_xxh3 == Some(content_xxh3(&std::fs::read(&header).unwrap()));
+    if !xxh3 {
+        eprintln!("skipping: this clang does not record xxh3 input hashes");
+    }
+    xxh3
+}
+
 fn log_text(checkout: &Checkout) -> String {
     std::fs::read_to_string(checkout.log()).unwrap_or_default()
 }
@@ -311,6 +338,10 @@ async fn touched_identical_header_is_served_with_mtime_replay() {
         return;
     };
     let (checkout, daemon, mut client, sid, stale_pch) = cold_build(&clang).await;
+    if !records_xxh3(&checkout, &stale_pch) {
+        daemon.stop().await;
+        return;
+    }
     set_mtime(&checkout.header(), TOUCHED_SECS);
     settle();
 
@@ -340,7 +371,11 @@ async fn touched_header_with_replay_disabled_is_a_miss() {
         eprintln!("skipping test: clang not found");
         return;
     };
-    let (checkout, daemon, mut client, sid, _) = cold_build(&clang).await;
+    let (checkout, daemon, mut client, sid, pch_bytes) = cold_build(&clang).await;
+    if !records_xxh3(&checkout, &pch_bytes) {
+        daemon.stop().await;
+        return;
+    }
     set_mtime(&checkout.header(), TOUCHED_SECS);
     settle();
 
@@ -381,7 +416,11 @@ async fn same_size_content_edit_is_a_miss() {
         eprintln!("skipping test: clang not found");
         return;
     };
-    let (checkout, daemon, mut client, sid, _) = cold_build(&clang).await;
+    let (checkout, daemon, mut client, sid, pch_bytes) = cold_build(&clang).await;
+    if !records_xxh3(&checkout, &pch_bytes) {
+        daemon.stop().await;
+        return;
+    }
     let edited = HEADER.replace("// v1", "// v2");
     assert_eq!(edited.len(), HEADER.len());
     std::fs::write(checkout.header(), edited).unwrap();
