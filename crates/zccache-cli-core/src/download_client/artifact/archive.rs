@@ -152,7 +152,12 @@ pub(super) fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(),
         let name = entry
             .enclosed_name()
             .map(|p| p.to_path_buf())
-            .ok_or_else(|| format!("unsafe zip entry: {}", entry.name()))?;
+            .ok_or_else(|| {
+                format!(
+                    "unsafe zip entry: {}",
+                    String::from_utf8_lossy(entry.name_raw())
+                )
+            })?;
         let out_path = safe_join(destination, &name)?;
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
@@ -162,7 +167,7 @@ pub(super) fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(),
             if (mode & 0o170000) == 0o120000 {
                 return Err(format!(
                     "zip symlink entries are not allowed: {}",
-                    entry.name()
+                    String::from_utf8_lossy(entry.name_raw())
                 ));
             }
         }
