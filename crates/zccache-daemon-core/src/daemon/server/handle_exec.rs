@@ -337,10 +337,9 @@ pub(super) async fn handle_generic_tool_exec(
     } else {
         None
     };
-    if let Some(InFlight::WokenByPeer) = coalesce_guard.as_ref().map(|g| g.outcome()) {
-        if let Some(resp) = try_exec_cache_hit(
-            state,
-            &full_hex,
+    if let Some(guard) = coalesce_guard.as_ref() {
+        if let Some(resp) = try_coalesced_exec_hit(
+            guard,
             cwd,
             output_files,
             output_streams,
@@ -350,9 +349,8 @@ pub(super) async fn handle_generic_tool_exec(
         {
             return resp;
         }
-        // Fell through: peer ran but didn't store, or store failed. Run it
-        // ourselves below; we still hold the guard so further peers wait
-        // for us, not the original runner.
+        // No reusable peer result was published. Retain the acquired guard
+        // through execution and publication below.
     }
 
     // 9. Cache miss — stage declared outputs only when the tool's argv gives
@@ -564,6 +562,26 @@ pub(super) async fn handle_generic_tool_exec(
     }
 }
 
+/// Recheck a miss while the acquired per-key guard remains held. Even a new
+/// owner may have missed before a peer published and removed its old slot.
+async fn try_coalesced_exec_hit(
+    guard: &InFlightGuardExec,
+    cwd: &Path,
+    output_files: &[NormalizedPath],
+    output_streams: ExecOutputStreams,
+    mode: MaterializationMode,
+) -> Option<Response> {
+    try_exec_cache_hit(
+        &guard.state,
+        &guard.key,
+        cwd,
+        output_files,
+        output_streams,
+        mode,
+    )
+    .await
+}
+
 // ─── Key composition ─────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -582,15 +600,6 @@ struct InFlightGuardExec {
     state: Arc<SharedState>,
     key: String,
     outcome: InFlight,
-}
-
-impl InFlightGuardExec {
-    fn outcome(&self) -> InFlight {
-        match self.outcome {
-            InFlight::Owner => InFlight::Owner,
-            InFlight::WokenByPeer => InFlight::WokenByPeer,
-        }
-    }
 }
 
 impl Drop for InFlightGuardExec {

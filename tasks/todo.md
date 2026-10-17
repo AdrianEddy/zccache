@@ -1393,6 +1393,7 @@ qualification remains required before publication.
 - [x] Make real modern-Clang regressions mandatory in the existing isolated integration workflow.
 - [x] Reproduce the remaining legacy chain defect: a same-stat base replacement plus header repair compiles inconsistent values.
 - [x] Refuse private views and producer freezing without recursive bound provenance; retain unchanged legacy consumers. The actual overlay-boundary wrong-code test failed before the fix and all 11 provenance tests pass afterward; primary review is clean.
+- [x] Fix the generic-exec lookup/acquire race exposed by full integration: after a peer publishes and drops its slot, a late new owner rechecks the cache. The deterministic regression failed before the fix; five coalescing unit tests and 27 generic-exec integration tests pass afterward. The one-spawn assertion remains unchanged.
 - [ ] Review the correction, rerun focused regressions and the full clean-tree local gate.
 - [ ] Merge and publish zccache 1.15.6 through the existing release workflow.
 - [ ] Replace FastLED's editable override with the published package, verify, and merge removal of local timestamp workarounds.
