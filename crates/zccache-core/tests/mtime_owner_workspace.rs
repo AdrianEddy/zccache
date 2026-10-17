@@ -18,8 +18,8 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "#1595 source-mtime replay restores workspace SOURCE files' recorded mtimes, not outputs",
     ),
     (
-        "zccache-fingerprint/src/pch_inputs/mod.rs",
-        "#1952 sets a content-verified PCH input header back to the mtime the PCH recorded; a source, not an output",
+        "zccache-fingerprint/src/pch_inputs/overlay.rs",
+        "sets recorded PCH input times only on independent compiler-private snapshots; shared inputs and cached outputs are unchanged",
     ),
     (
         "zccache-cli-core/src/cli/snapshot_fp.rs",
