@@ -828,7 +828,7 @@ async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
         return;
     };
     let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
-    std::fs::write(checkout.pch(), original_pch).unwrap();
+    std::fs::write(checkout.pch(), &original_pch).unwrap();
     let overlay = checkout.root.join("caller-overlay.json");
     std::fs::write(&overlay, r#"{"version":0,"roots":[]}"#).unwrap();
     let mut args = checkout.consumer_args();
@@ -837,6 +837,12 @@ async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
         overlay.to_string_lossy().into_owned(),
     ]);
     compile(&mut client, &sid, &clang, &checkout, args, None).await;
+    // Unchanged inputs need no private view even on legacy clang. The
+    // composition check below needs a verifiable, drifted input first.
+    if !records_xxh3(&checkout, &original_pch) {
+        daemon.stop().await;
+        return;
+    }
     set_mtime(&checkout.header(), TOUCHED_SECS);
     // Different source forces compiler execution instead of an object hit.
     std::fs::write(
@@ -866,6 +872,10 @@ async fn private_pch_view_preserves_header_identity_across_aliases() {
         return;
     };
     let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
+    if !records_xxh3(&checkout, &original_pch) {
+        daemon.stop().await;
+        return;
+    }
     std::fs::write(checkout.pch(), original_pch).unwrap();
     std::os::unix::fs::symlink("a.h", checkout.root.join("inc/alias.h")).unwrap();
     std::fs::hard_link(checkout.header(), checkout.root.join("inc/hard.h")).unwrap();
