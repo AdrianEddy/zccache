@@ -10,6 +10,7 @@ pub(super) struct CompileExecRequest<'a> {
     pub(super) state_arc: &'a Arc<SharedState>,
     pub(super) compiler: &'a NormalizedPath,
     pub(super) effective_args: &'a [String],
+    pub(super) pch_overlay: Option<&'a Path>,
     pub(super) cwd: &'a Path,
     pub(super) cwd_path: &'a NormalizedPath,
     pub(super) source_path: &'a NormalizedPath,
@@ -70,6 +71,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
         state_arc,
         compiler,
         effective_args,
+        pch_overlay,
         cwd,
         cwd_path,
         source_path,
@@ -327,6 +329,26 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             source = %source_path.display(),
             "amalgamated compiler unit acquired exclusive build access"
         );
+    }
+
+    // The preprocessor pass is a compiler child too: it shares the same
+    // bounded admission as the actual compile instead of bypassing the gate.
+    if let Some(overlay) = pch_overlay {
+        if let Err(refusal) = super::super::pch_overlay_aliases::extend_overlay_aliases(
+            overlay,
+            compiler,
+            effective_args,
+            cwd,
+            client_env,
+            lineage,
+            None,
+        )
+        .await
+        {
+            return CompileExecResult::Error(Response::Error {
+                message: format!("PCH alias validation failed: {refusal}"),
+            });
+        }
     }
 
     // Issue #532: hash pre-known rustc inputs (source + externs) on a blocking

@@ -118,22 +118,46 @@ pub(super) async fn run_compiler_direct_with_family(
     tmp_dir: &Path,
     family_hint: crate::compiler::CompilerFamily,
 ) -> Response {
-    // #1952: an uncached compile that loads a PCH needs it repaired too.
-    if matches!(
+    let lineage = super::super::lineage::Lineage::current(
+        sessions.get(sid).map(|s| s.client_pid),
+        Some(sid.to_string()),
+    );
+
+    // Keep a private view alive through this uncached compiler invocation too.
+    let _pch_overlay = if matches!(
         family_hint,
         crate::compiler::CompilerFamily::Gcc | crate::compiler::CompilerFamily::Clang
     ) {
         let force_includes = crate::depgraph::args::parse_gnu_args(args, cwd).force_includes;
         let root = compile_worktree_root(state, sid, cwd, client_env.as_deref())
             .unwrap_or_else(|| cwd.into());
-        super::handle_compile::pch_gate::repair_loaded_pch_inputs(
+        match super::handle_compile::pch_overlay::prepare_loaded_pch_overlay(
             state,
             sid,
             &force_includes,
             root.as_path(),
             client_env.as_deref(),
-        );
+            args,
+            crate::depgraph::args::parse_gnu_args(args, cwd)
+                .output_file
+                .as_ref()
+                .is_some_and(|output| super::handle_compile::pch_gate::is_pch_output(output)),
+        ) {
+            Ok(view) => view,
+            Err(refusal) => {
+                return Response::Error {
+                    message: format!("PCH input validation failed; rebuild the PCH: {refusal}"),
+                }
+            }
+        }
+    } else {
+        None
+    };
+    let mut execution_args = args.to_vec();
+    if let Some(view) = &_pch_overlay {
+        view.append_args(&mut execution_args);
     }
+    let args = execution_args.as_slice();
     let _rsp_guard = match crate::compiler::response_file::write_response_file_if_needed(
         args,
         tmp_dir,
@@ -147,10 +171,6 @@ pub(super) async fn run_compiler_direct_with_family(
         }
     };
 
-    let lineage = super::super::lineage::Lineage::current(
-        sessions.get(sid).map(|s| s.client_pid),
-        Some(sid.to_string()),
-    );
     let mut builder = kernal_api::SpawnSpec::new(compiler.as_path()).current_dir(cwd);
     if let Some(ref rsp) = _rsp_guard {
         builder = builder.arg(rsp.at_arg());
@@ -195,6 +215,23 @@ pub(super) async fn run_compiler_direct_with_family(
             event = "compile_exclusive",
             "direct amalgamated compiler unit acquired exclusive build access"
         );
+    }
+    if let Some(view) = &_pch_overlay {
+        if let Err(refusal) = super::handle_compile::pch_overlay_aliases::extend_overlay_aliases(
+            view.path(),
+            compiler,
+            args,
+            cwd,
+            client_env,
+            &lineage,
+            (!stdin_bytes.is_empty()).then_some(stdin_bytes),
+        )
+        .await
+        {
+            return Response::Error {
+                message: format!("PCH alias validation failed: {refusal}"),
+            };
+        }
     }
     let (result, streamed_output) = if let Some(context) = crate::daemon::compile_output::current()
     {
@@ -245,6 +282,25 @@ pub(super) async fn run_compiler_direct_with_family(
                 }
             }
             let exit_code = crate::platform::process::exit::outcome(&output.status).exit_code;
+            if exit_code == 0 {
+                if let Some(output_path) =
+                    crate::depgraph::args::parse_gnu_args(args, cwd).output_file
+                {
+                    if super::handle_compile::pch_gate::is_pch_output(&output_path) {
+                        if let Err(error) =
+                            super::handle_compile::pch_provenance::record_pch_imports_for_output(
+                                output_path.as_path(),
+                                output_path.as_path(),
+                                _pch_overlay.as_ref().map(|view| view.path()),
+                            )
+                        {
+                            return Response::Error {
+                                message: format!("failed to record PCH import provenance: {error}"),
+                            };
+                        }
+                    }
+                }
+            }
             write_session_log(sessions, sid, &format!("[DIRECT] exit_code={exit_code}"));
             Response::CompileResult {
                 exit_code,

@@ -9,8 +9,9 @@
 //! - producer: `-Werror=invalid-pch -verify-pch -fpch-validate-input-files-content`
 //! - consumer: `-Werror=invalid-pch -fpch-validate-input-files-content`
 //!
-//! The consumer is a bare clang compile, so it checks the served PCH bytes
-//! exactly as a build would.
+//! Consumers run through zccache so private VFS snapshots can preserve strict
+//! validation without changing source timestamps. Bare clang is a negative control.
+//! These regressions run in the standard isolated integration suite.
 
 #![allow(
     clippy::unwrap_used,
@@ -26,6 +27,19 @@ use std::time::Duration;
 use kernal_api::platform::fs::{set_file_mtime, FileTime};
 use zccache::daemon::DaemonServer;
 use zccache::protocol::{Request, Response};
+
+fn pch_tests_required() -> bool {
+    std::env::var("ZCCACHE_PCH_TESTS_REQUIRED").as_deref() == Ok("1")
+}
+
+fn find_pch_test_clang() -> Option<zccache::core::NormalizedPath> {
+    let compiler = zccache::test_support::find_clang();
+    assert!(
+        compiler.is_some() || !pch_tests_required(),
+        "required PCH regressions need clang >=19; run the pinned CI toolchain step"
+    );
+    compiler
+}
 
 /// `canonicalize` without Windows' `\\?\` verbatim prefix, which clang
 /// never records.
@@ -284,6 +298,7 @@ async fn compile_outcome(
                     String::from_utf8_lossy(&stderr).into_owned(),
                 );
             }
+            Some(Response::Error { message }) => return (1, false, message),
             other => panic!("expected CompileResult, got: {other:?}"),
         }
     }
@@ -324,10 +339,18 @@ fn records_xxh3(checkout: &Checkout, pch_bytes: &[u8]) -> bool {
     let header = checkout.root.join("pch.h");
     let inputs = parse_pch_inputs(pch_bytes).unwrap().unwrap();
     let Some(record) = inputs.iter().find(|input| Path::new(&input.path) == header) else {
+        assert!(
+            !pch_tests_required(),
+            "required PCH regression could not find its input record"
+        );
         return false;
     };
     let xxh3 = record.content_xxh3 == Some(content_xxh3(&std::fs::read(&header).unwrap()));
     if !xxh3 {
+        assert!(
+            !pch_tests_required(),
+            "required PCH regressions need clang >=19 with xxh3 input hashes"
+        );
         eprintln!("skipping: this clang does not record xxh3 input hashes");
     }
     xxh3
@@ -340,9 +363,8 @@ fn log_text(checkout: &Checkout) -> String {
 /// Negative control: the cached PCH served as-is after an identical header
 /// was touched breaks the consumer with the redefinition error.
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn touched_header_without_replay_breaks_the_consumer() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -359,9 +381,8 @@ async fn touched_header_without_replay_breaks_the_consumer() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
-async fn touched_identical_header_is_served_with_mtime_replay() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+async fn touched_identical_header_is_served_without_changing_source_mtime() {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -379,23 +400,23 @@ async fn touched_identical_header_is_served_with_mtime_replay() {
     assert_eq!(std::fs::read(checkout.pch()).unwrap(), stale_pch);
     assert_eq!(
         mtime_secs(&checkout.header()),
-        RECORDED_SECS,
-        "the header's mtime must be replayed to the recorded value"
+        TOUCHED_SECS,
+        "serving a cached PCH must not change a shared source header"
     );
     assert!(
         mtime_secs(&checkout.pch()) >= mtime_secs(&checkout.header()),
         "the served PCH must not be older than its inputs"
     );
     let log = log_text(&checkout);
-    assert!(log.contains("[PCH_MTIME_REPLAY]"), "log:\n{log}");
-    assert_consumes(&checkout, &clang, "replayed hit");
+    assert!(log.contains("[PCH_INPUT_VIEW_PENDING]"), "log:\n{log}");
+    let args = checkout.consumer_args();
+    compile(&mut client, &sid, &clang, &checkout, args, None).await;
     daemon.stop().await;
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn touched_header_with_replay_disabled_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -438,9 +459,8 @@ async fn touched_header_with_replay_disabled_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn same_size_content_edit_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -464,13 +484,13 @@ async fn same_size_content_edit_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn size_change_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
-    let (checkout, daemon, mut client, sid, _) = cold_build(&clang).await;
+    let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
+    std::fs::write(checkout.pch(), original_pch).unwrap();
     std::fs::write(checkout.header(), format!("{HEADER}// grown\n")).unwrap();
     settle();
 
@@ -482,13 +502,13 @@ async fn size_change_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn different_include_spelling_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
-    let (checkout, daemon, mut client, sid, _) = cold_build(&clang).await;
+    let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
+    std::fs::write(checkout.pch(), original_pch).unwrap();
     // Same directory, different spelling: the PCH would record it.
     let respelled = format!("{}/build/../inc", checkout.root.display());
     let cached = build_pch(&mut client, &sid, &clang, &checkout, &respelled, None).await;
@@ -498,9 +518,8 @@ async fn different_include_spelling_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn pch_from_another_checkout_is_refused() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -528,9 +547,8 @@ async fn pch_from_another_checkout_is_refused() {
 /// served from the cache; the base lands with a fresh mtime, and serving the
 /// chain must replay the recorded one or clang rejects the chain.
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn chained_pch_is_served_with_base_mtime_replay() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -555,6 +573,11 @@ async fn chained_pch_is_served_with_base_mtime_replay() {
         args[6] = top_pch.to_string_lossy().into_owned();
         args.push("-include-pch".to_owned());
         args.push(checkout.pch().to_string_lossy().into_owned());
+        args.extend([
+            "-MD".to_owned(),
+            "-MF".to_owned(),
+            root.join("build/top.d").to_string_lossy().into_owned(),
+        ]);
         args
     };
     let consume_top = || {
@@ -584,7 +607,11 @@ async fn chained_pch_is_served_with_base_mtime_replay() {
     let (ok, stderr) = consume_top();
     assert!(ok, "cold chain: {stderr}");
 
-    // Clean rebuild: both PCHs come back from the cache.
+    let companion = root.join("build/top.h.pch.zccache-imports.json");
+    let original_companion = std::fs::read(&companion).unwrap();
+    // Clean rebuild: PCH, user depfile, and provenance all come from cache.
+    std::fs::remove_file(&companion).unwrap();
+    std::fs::remove_file(root.join("build/top.d")).unwrap();
     std::fs::remove_file(checkout.pch()).unwrap();
     std::fs::remove_file(&top_pch).unwrap();
     settle();
@@ -596,11 +623,17 @@ async fn chained_pch_is_served_with_base_mtime_replay() {
         compile(&mut client, &sid, &clang, &checkout, top_args(), None).await,
         "the chained PCH should be served"
     );
+    assert_eq!(std::fs::read(&companion).unwrap(), original_companion);
+    assert!(std::fs::read_to_string(root.join("build/top.d"))
+        .unwrap()
+        .contains("top.h"));
     let log = log_text(&checkout);
-    assert!(log.contains("[PCH_MTIME_REPLAY]"), "log:\n{log}");
-    assert_ne!(mtime_secs(&checkout.pch()), TOUCHED_SECS);
-    let (ok, stderr) = consume_top();
-    assert!(ok, "served chain must load: {stderr}");
+    assert!(log.contains("[PCH_INPUT_VIEW_PENDING]"), "log:\n{log}");
+    assert_eq!(mtime_secs(&checkout.pch()), TOUCHED_SECS);
+    let mut args = checkout.consumer_args();
+    args[1] = root.join("use_top.cpp").to_string_lossy().into_owned();
+    args[4] = top_pch.to_string_lossy().into_owned();
+    compile(&mut client, &sid, &clang, &checkout, args, None).await;
     daemon.stop().await;
 }
 
@@ -609,7 +642,7 @@ async fn chained_pch_is_served_with_base_mtime_replay() {
 /// repair the drifted header before clang loads the PCH. Covers a touch
 /// forwards (checkout, editor save) and backwards (cache/tar restore).
 async fn loaded_pch_is_repaired_before_the_consumer_runs(drifted_secs: i64) {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -635,7 +668,7 @@ async fn loaded_pch_is_repaired_before_the_consumer_runs(drifted_secs: i64) {
 
     let args = checkout.consumer_args();
     compile(&mut client, &sid, &clang, &checkout, args, None).await;
-    assert_eq!(mtime_secs(&checkout.header()), RECORDED_SECS);
+    assert_eq!(mtime_secs(&checkout.header()), drifted_secs);
     assert_eq!(
         std::fs::read(checkout.pch()).unwrap(),
         pch_bytes,
@@ -647,13 +680,11 @@ async fn loaded_pch_is_repaired_before_the_consumer_runs(drifted_secs: i64) {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn loaded_pch_header_touched_forwards_is_repaired() {
     loaded_pch_is_repaired_before_the_consumer_runs(TOUCHED_SECS).await;
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn loaded_pch_header_moved_backwards_is_repaired() {
     loaded_pch_is_repaired_before_the_consumer_runs(RECORDED_SECS - 86_400).await;
 }
@@ -662,9 +693,8 @@ async fn loaded_pch_header_moved_backwards_is_repaired() {
 /// zccache leaves the file alone and clang's strict validation rejects the
 /// PCH. Replay switched off leaves an identical touched header alone too.
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -697,8 +727,195 @@ async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
     let (exit_code, _, _) = compile_outcome(&mut client, &sid, &clang, &checkout, args, None).await;
     assert_ne!(exit_code, 0, "an edited header must invalidate the PCH");
     assert_eq!(mtime_secs(&checkout.header()), TOUCHED_SECS);
-    let log = log_text(&checkout);
-    assert!(log.contains("[PCH_NOT_REPAIRED]"), "log:\n{log}");
-    assert!(log.contains("content_mismatch"), "log:\n{log}");
+    // Content validation must fail rather than conceal a real edit.
+    daemon.stop().await;
+}
+
+/// Replaying an old header mtime must not hide a real edit from another
+/// Ninja build directory whose object was compiled from different bytes.
+#[cfg(unix)]
+#[tokio::test]
+async fn cached_pch_does_not_hide_reverted_content_from_another_ninja_build() {
+    let Some(clang) = find_pch_test_clang() else {
+        return;
+    };
+    let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
+    if !records_xxh3(&checkout, &original_pch) {
+        daemon.stop().await;
+        return;
+    }
+    let other = checkout.root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let source = checkout.root.join("ordinary.cpp");
+    std::fs::write(
+        &source,
+        "#include \"inc/a.h\"\nint value() { return sizeof(A); }\nint main() { return value(); }\n",
+    )
+    .unwrap();
+    std::fs::write(other.join("build.ninja"), format!(
+        "rule cxx\n  command = \"{}\" -MMD -MF $out.d $in -o $out\n  depfile = $out.d\n  deps = gcc\nbuild ordinary: cxx {}\n",
+        clang.display(), source.display(),
+    )).unwrap();
+    let ninja = || {
+        let output = std::process::Command::new("ninja")
+            .arg("-C")
+            .arg(&other)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    ninja();
+    assert_eq!(
+        std::process::Command::new(other.join("ordinary"))
+            .status()
+            .unwrap()
+            .code(),
+        Some(4)
+    );
+    std::fs::write(checkout.header(), HEADER.replace("int x;", "long x;")).unwrap();
+    let future = FileTime::now().unix_seconds() + 10;
+    set_mtime(&checkout.header(), future);
+    ninja();
+    assert_eq!(
+        std::process::Command::new(other.join("ordinary"))
+            .status()
+            .unwrap()
+            .code(),
+        Some(8)
+    );
+    std::fs::write(checkout.header(), HEADER).unwrap();
+    set_file_mtime(
+        &checkout.header(),
+        FileTime::from_unix_time(future + 10, 123_456_789),
+    )
+    .unwrap();
+    let source_time =
+        FileTime::from_last_modification_time(&std::fs::metadata(checkout.header()).unwrap());
+    settle();
+    let include = checkout.default_include();
+    assert!(build_pch(&mut client, &sid, &clang, &checkout, &include, None).await);
+    assert_eq!(std::fs::read(checkout.pch()).unwrap(), original_pch);
+    assert_eq!(
+        FileTime::from_last_modification_time(&std::fs::metadata(checkout.header()).unwrap()),
+        source_time
+    );
+    let args = checkout.consumer_args();
+    compile(&mut client, &sid, &clang, &checkout, args, None).await;
+    assert_eq!(
+        FileTime::from_last_modification_time(&std::fs::metadata(checkout.header()).unwrap()),
+        source_time
+    );
+    ninja();
+    assert_eq!(
+        std::process::Command::new(other.join("ordinary"))
+            .status()
+            .unwrap()
+            .code(),
+        Some(4)
+    );
+    daemon.stop().await;
+}
+
+/// Caller VFS overlays need no composition when PCH inputs still match.
+#[tokio::test]
+async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
+    let Some(clang) = find_pch_test_clang() else {
+        return;
+    };
+    let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
+    std::fs::write(checkout.pch(), &original_pch).unwrap();
+    let overlay = checkout.root.join("caller-overlay.json");
+    std::fs::write(&overlay, r#"{"version":0,"roots":[]}"#).unwrap();
+    let mut args = checkout.consumer_args();
+    args.extend([
+        "-ivfsoverlay".to_owned(),
+        overlay.to_string_lossy().into_owned(),
+    ]);
+    compile(&mut client, &sid, &clang, &checkout, args, None).await;
+    // Unchanged inputs need no private view even on legacy clang. The
+    // composition check below needs a verifiable, drifted input first.
+    if !records_xxh3(&checkout, &original_pch) {
+        daemon.stop().await;
+        return;
+    }
+    set_mtime(&checkout.header(), TOUCHED_SECS);
+    // Different source forces compiler execution instead of an object hit.
+    std::fs::write(
+        checkout.root.join("use.cpp"),
+        "#include \"a.h\"\nB<> b; int main() { A a{}; return a.x + 1; }\n",
+    )
+    .unwrap();
+    settle();
+    let mut args = checkout.consumer_args();
+    args.extend([
+        "-ivfsoverlay".to_owned(),
+        overlay.to_string_lossy().into_owned(),
+    ]);
+    let (code, _, error) = compile_outcome(&mut client, &sid, &clang, &checkout, args, None).await;
+    assert_ne!(code, 0);
+    assert!(error.contains("cannot compose"), "{error}");
+    assert_eq!(mtime_secs(&checkout.header()), TOUCHED_SECS);
+    daemon.stop().await;
+}
+
+/// Symlinks, hardlinks, and symlinked include directories must keep one
+/// header identity when the private view replaces a drifted PCH input.
+#[cfg(unix)]
+#[tokio::test]
+async fn private_pch_view_preserves_header_identity_across_aliases() {
+    let Some(clang) = find_pch_test_clang() else {
+        return;
+    };
+    let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
+    if !records_xxh3(&checkout, &original_pch) {
+        daemon.stop().await;
+        return;
+    }
+    std::fs::write(checkout.pch(), original_pch).unwrap();
+    std::os::unix::fs::symlink("a.h", checkout.root.join("inc/alias.h")).unwrap();
+    std::fs::hard_link(checkout.header(), checkout.root.join("inc/hard.h")).unwrap();
+    std::os::unix::fs::symlink("inc", checkout.root.join("inc-links")).unwrap();
+    std::fs::create_dir_all(checkout.root.join("other/deep")).unwrap();
+    std::fs::hard_link(checkout.header(), checkout.root.join("other/via-parent.h")).unwrap();
+    std::os::unix::fs::symlink("../other/deep", checkout.root.join("inc/rebound")).unwrap();
+    std::fs::write(checkout.root.join("use.cpp"),
+        "#include \"inc/alias.h\"\n#include \"inc/hard.h\"\n#include \"inc-links/a.h\"\n#include \"inc/rebound/../via-parent.h\"\nB<> b; int main(){ A a{}; return a.x; }\n").unwrap();
+    let (ok, error) = checkout.consume(&clang);
+    assert!(
+        ok,
+        "alias negative control must compile before timestamp drift: {error}"
+    );
+    set_file_mtime(
+        &checkout.header(),
+        FileTime::from_unix_time(TOUCHED_SECS, 123_456_789),
+    )
+    .unwrap();
+    let original_time =
+        FileTime::from_last_modification_time(&std::fs::metadata(checkout.header()).unwrap());
+    settle();
+    let mut args = checkout.consumer_args();
+    args.extend([
+        "-MD".to_owned(),
+        "-MF".to_owned(),
+        checkout
+            .root
+            .join("build/aliases.d")
+            .to_string_lossy()
+            .into_owned(),
+    ]);
+    compile(&mut client, &sid, &clang, &checkout, args, None).await;
+    assert_eq!(
+        FileTime::from_last_modification_time(&std::fs::metadata(checkout.header()).unwrap()),
+        original_time
+    );
+    let dependencies = std::fs::read_to_string(checkout.root.join("build/aliases.d")).unwrap();
+    assert!(dependencies.contains("alias.h"), "{dependencies}");
+    assert!(dependencies.contains("via-parent.h"), "{dependencies}");
+    assert!(!dependencies.contains("input-0"), "{dependencies}");
     daemon.stop().await;
 }

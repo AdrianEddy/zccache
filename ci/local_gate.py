@@ -260,6 +260,8 @@ def checks() -> list[Check]:
             bosn_job="integration",
             required_steps=(
                 "Build integration test binaries",
+                "Install PCH regression toolchain",
+                "Strict PCH regressions (Clang 21)",
                 "Test (full workspace)",
                 "Wrapper daemon-unavailable contract (exit 125)",
                 "Strict artifact-layout validation",

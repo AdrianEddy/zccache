@@ -590,7 +590,7 @@ or allowlisted in the guard:
 | rust-plan restore (`rust_plan/local.rs`) | routed: `recorded_mtime_or_now` + `stamp_mtime` | the manifest's recorded object mtime, `now()` when the manifest has `0` |
 | directory-bundle restore | routed: `stamp_recorded_mtime` | the recorded entry timestamp |
 | `mtime_replay` (#1595) | allowlisted | restores workspace *source* files, not outputs |
-| `pch_inputs` (#1952) | allowlisted | sets a content-verified PCH input *header* back to the mtime the cached PCH recorded |
+| `pch_inputs` | allowlisted | stamps independent compiler-private snapshots; original input timestamps never change |
 | `snapshot_fp` | allowlisted | bumps existing cargo fingerprint stamp files in place |
 | `retired_store` | allowlisted | `.last-active` liveness marker |
 
@@ -599,72 +599,68 @@ scanned.
 
 ### Strict PCH serving (#1952)
 
-A clang PCH records each input header's spelling, size, mtime (seconds) and an
-xxh3 content hash (`INPUT_FILE` / `INPUT_FILE_HASH`). A consumer rejects the PCH
-on a size or mtime mismatch, and even when
-`-fpch-validate-input-files-content` forgives an mtime mismatch on identical
-content, clang's `#pragma once` lookup still keys on (size, mtime): the header
-is parsed twice and the consumer fails with `redefinition of ...`. A content
-key alone is therefore not enough to serve a PCH; the workspace must match the
-record exactly. zccache never asks for `-fno-pch-timestamp` and never patches
-PCH bytes.
+A clang PCH records each input's spelling, size, whole-second Unix mtime,
+and content hash (`INPUT_FILE` / `INPUT_FILE_HASH`). LLVM's PCH validity
+check can accept an identical header with a changed mtime under
+`-fpch-validate-input-files-content`. Its independent `#pragma once` lookup
+still keys on size and mtime, so a consumer can then parse the header twice.
 
-PCH generation (output `*.pch` / `*.gch`) is its own artifact kind:
+zccache reads those records before serving a cached PCH. The worktree-salted
+key includes exact argv spelling and cwd. Missing files, changed sizes or
+content, and a mismatched top-level input turn the hit into a rebuild. The
+PCH's `METADATA` record identifies the hash format: clang >= 19 records xxh3;
+older versions cannot verify timestamp drift and refuse it. A mismatch never
+becomes a match merely because all input hashes changed.
 
-- **Key.** Worktree-salted as before (#474/#489), plus the exact argv (order and
-  spelling) and cwd, because the PCH embeds the spellings its inputs resolved
-  through.
-- **Gate on every hit** (`handle_compile/pch_gate.rs`, records parsed by
-  `zccache-fingerprint/src/pch_inputs`). Before the PCH is materialized, its
-  records are read from the cached PCH itself (only the head of the file) and
-  checked against the workspace:
+For content-identical timestamp drift, cached PCH bytes remain reusable.
+When zccache runs a consumer, `handle_compile/pch_overlay.rs` recursively
+collects input records from its explicit or implicit PCH and imported base
+PCHs. Conflicting records for one original path are refused. The fingerprint
+module rechecks each drifted input, writes an independent copy into a private
+directory under the daemon's temporary root, and sets only that copy's mtime
+to the recorded seconds. Imported PCH copies retain their bytes. Ordinary Clang PCH imports can have
+zero signatures, so size and timestamp checks cannot prove that a base PCH
+still has its original content. A `.zccache-imports.json` companion binds the
+parent PCH's content hash to the imported PCH hashes observed by its producer.
+Every PCH loaded by a chained producer is frozen before compiler execution,
+even if its timestamp already matches. Provenance is captured only from that
+executed immutable view, closing same-size, same-second replacement races.
+It is stored and restored with the parent artifact. Any private view, including
+a producer's frozen imports, requires bound provenance recursively through the
+imported chain. Matching size and mtime cannot establish a missing baseline:
+repairing another header could make a previously rejected stale chain compile
+with inconsistent values. Legacy consumers needing no private view can still
+run unchanged; legacy chains must be rebuilt before repair. Changed imports
+and corrupt companions are refused.
+No original header or PCH is modified.
 
-  | Recorded input | Result |
-  |---|---|
-  | missing / not a file / relative | miss |
-  | size differs | miss (checked before hashing) |
-  | content xxh3 differs | miss |
-  | the PCH's top-level header is another file (another checkout) | miss |
-  | content identical, mtime differs | set the header's mtime to the recorded value, then serve |
-  | same, but the header is outside the request's key root, no hash was recorded, or replay is off | miss |
+The compiler gets `-ivfsoverlay` with `use-external-names: false`, so Clang sees
+the expected metadata while dependency files, nested relative includes and
+`__FILE__` retain original paths. A private preprocessor dependency scan
+preserves raw include spellings and maps symlinks, hardlinks, and symlinked
+include directories to the same snapshot identity. It strips user output
+and dependency destinations and runs under the compiler admission gate.
+The owning temporary-directory guard lives
+until the compiler exits. The injected argv is an execution detail, excluded
+from cache keys. Caller-provided VFS overlays are refused when composition
+would require a private timestamp view, rather than silently changing their
+meaning. Inputs outside the permitted checkout root remain ineligible.
 
-  Content is verified against `INPUT_FILE_HASH`, which clang >= 19 writes as
-  xxh3-64. clang 18 and older write an `llvm::hash_code` that cannot be
-  recomputed. A PCH whose hashes match no input under xxh3 is treated as
-  unverifiable: unchanged inputs still serve, and an mtime-only mismatch is a
-  miss, never a replay. Chained PCHs record their base PCH in `IMPORT`
-  (clang >= 20) or `IMPORTS` (clang 17-19). The base is checked by size and
-  mtime, and its mtime is replayed like a header's. Its bytes are already in
-  the consumer's cache key.
+`[PCH_INPUT_VIEW_PENDING]` logs drift seen on a producer hit;
+`[PCH_INPUT_VIEW]` logs snapshots created for a consumer. Snapshot preparation
+failures and changed loaded inputs fail the compile with a rebuild diagnostic.
+Cache hits for consumer objects need no compiler view. Both cacheable and
+uncacheable compiler executions support the private view, and both PCH
+producers and consumers must pass through zccache.
 
-  A miss falls through to a normal compile, which rebuilds the PCH. When the
-  refusal was mtime-only (replay off, or an input outside the root), the
-  rebuilt PCH has the same key but different bytes, so publication evicts the
-  key (#1244) and the following build stores it fresh. Each replayed mtime is logged (`[PCH_MTIME_REPLAY] <path> mtime
-  <old> -> <recorded>`) and refusals are logged as `[PCH_REFUSED]`. After
-  setting the mtime the header is re-read; if it changed in between, its mtime
-  is set to now and the hit is refused, so a concurrent edit always rebuilds.
-- **Atomicity.** The gate and the PCH write run under one daemon-wide lock
-  inside the compile request, so the replay and the PCH land before the
-  compile returns and no consumer can start in between.
-- **PCH mtime.** The PCH itself takes the `NativeFreshHit` batch floor
-  (`now()`), so it is never older than its (replayed) inputs.
-- **Loaded PCHs.** A PCH already on disk breaks the same way, and a build
-  tool that thinks it is current never re-runs the PCH step (a cache or tar
-  restore that moves a header's mtime *backwards* is the common case). So
-  every compile zccache runs (cache miss or uncacheable) that loads a PCH,
-  whether through `-include-pch`, a `.gch`, or the `<header>.pch` clang
-  substitutes for `-include <header>`, gets the PCH's records checked before
-  clang starts (`repair_loaded_pch_inputs`). When nothing drifted this is a
-  stat-only pass with no hashing. A drifted, content-verified header under
-  the key root is replayed and logged `[PCH_MTIME_REPLAY] ... for loaded
-  <pch>`. Anything else is logged `[PCH_NOT_REPAIRED]` and left for clang's
-  own validation to reject. The PCH file is never modified, and the compile
-  is never failed by this step. A cache hit on the PCH consumer runs no
-  clang, so it needs no repair.
-- **Control.** `ZCCACHE_PCH_MTIME_REPLAY` (per request, from the client env) is on
-  by default; `0`, `false`, `off` or `no` turn replay off, both for served and
-  loaded PCHs, and a touched header then rebuilds the PCH instead.
+This leaves shared source timestamps intact, so ordinary objects in another
+build directory still observe a real edit or edit-and-revert. It preserves
+strict PCH validation and never patches PCH bytes or disables timestamps.
+`ZCCACHE_PCH_MTIME_REPLAY=0` disables timestamp repair for that request; a
+producer with timestamp drift rebuilds, while an already-stale loaded PCH is
+left for Clang's strict validation. Chained producers still freeze matching
+imported files so their provenance describes the bytes actually compiled.
+
  `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
 visible to the guard); it unpacks a downloaded symbol archive, not a cache
 output.

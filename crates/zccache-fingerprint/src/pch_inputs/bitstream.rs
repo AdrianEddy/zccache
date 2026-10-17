@@ -33,6 +33,7 @@ const INPUT_FILE_HASH: u64 = 2;
 /// `CONTROL_BLOCK` record code for one imported AST file (a chained PCH's
 /// base PCH), and clang's `ModuleKind::MK_PCH`.
 const IMPORT: u64 = 2;
+const METADATA: u64 = 1;
 const MODULE_KIND_PCH: u64 = 2;
 
 /// Fixed abbreviation ids.
@@ -380,6 +381,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Option<Vec<PchInput>>, PchInputsErro
     };
     let mut blockinfo: HashMap<u64, Vec<Abbrev>> = HashMap::new();
     let mut inputs: Vec<PchInput> = Vec::new();
+    let mut compiler_major = None;
     let mut decode_error: Option<PchInputsError> = None;
     let mut finished = false;
     while !finished {
@@ -405,6 +407,13 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Option<Vec<PchInput>>, PchInputsErro
                 let mut on_record = |block: u64, record: Record<'_>| {
                     let decoded = match block {
                         INPUT_FILES_BLOCK_ID => decode_input_record(&mut inputs, record),
+                        CONTROL_BLOCK_ID if record.code == METADATA => {
+                            // METADATA: AST major/minor, clang major/minor,
+                            // relocatable/error flags. Only clang >= 19 uses
+                            // reproducible xxh3 INPUT_FILE_HASH records.
+                            compiler_major = record.ops.get(2).copied();
+                            Ok(())
+                        }
                         CONTROL_BLOCK_ID if record.code == IMPORT => {
                             decode_import_record(&mut inputs, &record)
                         }
@@ -436,6 +445,11 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Option<Vec<PchInput>>, PchInputsErro
     }
     if let Some(error) = decode_error {
         return Err(error);
+    }
+    if compiler_major.is_none_or(|major| major < 19) {
+        for input in &mut inputs {
+            input.content_xxh3 = None;
+        }
     }
     Ok(Some(inputs))
 }
