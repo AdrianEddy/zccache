@@ -649,9 +649,22 @@ PCH generation (output `*.pch` / `*.gch`) is its own artifact kind:
   compile returns and no consumer can start in between.
 - **PCH mtime.** The PCH itself takes the `NativeFreshHit` batch floor
   (`now()`), so it is never older than its (replayed) inputs.
+- **Loaded PCHs.** A PCH already on disk breaks the same way, and a build
+  tool that thinks it is current never re-runs the PCH step (a cache or tar
+  restore that moves a header's mtime *backwards* is the common case). So
+  every compile zccache runs (cache miss or uncacheable) that loads a PCH,
+  whether through `-include-pch`, a `.gch`, or the `<header>.pch` clang
+  substitutes for `-include <header>`, gets the PCH's records checked before
+  clang starts (`repair_loaded_pch_inputs`). When nothing drifted this is a
+  stat-only pass with no hashing. A drifted, content-verified header under
+  the key root is replayed and logged `[PCH_MTIME_REPLAY] ... for loaded
+  <pch>`. Anything else is logged `[PCH_NOT_REPAIRED]` and left for clang's
+  own validation to reject. The PCH file is never modified, and the compile
+  is never failed by this step. A cache hit on the PCH consumer runs no
+  clang, so it needs no repair.
 - **Control.** `ZCCACHE_PCH_MTIME_REPLAY` (per request, from the client env) is on
-  by default; `0`, `false`, `off` or `no` turn replay off, and a touched header
-  then rebuilds the PCH instead.
+  by default; `0`, `false`, `off` or `no` turn replay off, both for served and
+  loaded PCHs, and a touched header then rebuilds the PCH instead.
  `tar` extraction in `symbols.rs` sets entry mtimes implicitly (not
 visible to the guard); it unpacks a downloaded symbol archive, not a cache
 output.

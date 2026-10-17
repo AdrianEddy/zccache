@@ -147,6 +147,21 @@ impl Checkout {
         self.root.join("inc").to_string_lossy().into_owned()
     }
 
+    /// The consumer's argv, for a compile that loads the PCH via zccache.
+    fn consumer_args(&self) -> Vec<String> {
+        vec![
+            "-c".to_owned(),
+            self.root.join("use.cpp").to_string_lossy().into_owned(),
+            format!("-I{}", self.default_include()),
+            "-include-pch".to_owned(),
+            self.pch().to_string_lossy().into_owned(),
+            "-Werror=invalid-pch".to_owned(),
+            "-fpch-validate-input-files-content".to_owned(),
+            "-o".to_owned(),
+            self.root.join("build/use.o").to_string_lossy().into_owned(),
+        ]
+    }
+
     /// Compile `use.cpp` against the PCH with bare clang (no zccache).
     fn consume(&self, clang: &Path) -> (bool, String) {
         let out = std::process::Command::new(clang)
@@ -217,6 +232,21 @@ async fn compile(
     args: Vec<String>,
     replay: Option<&str>,
 ) -> bool {
+    let (exit_code, cached, stderr) =
+        compile_outcome(client, session_id, clang, checkout, args, replay).await;
+    assert_eq!(exit_code, 0, "compile failed: {stderr}");
+    cached
+}
+
+/// Run one compile through the daemon. Returns `(exit_code, cached, stderr)`.
+async fn compile_outcome(
+    client: &mut ClientConn,
+    session_id: &str,
+    clang: &Path,
+    checkout: &Checkout,
+    args: Vec<String>,
+    replay: Option<&str>,
+) -> (i32, bool, String) {
     let mut env: Vec<(String, String)> = std::env::vars().collect();
     // The harness's own ZCCACHE_* settings (e.g. a worktree root pointing at
     // this repository) must not leak into the fixture's checkout.
@@ -244,17 +274,15 @@ async fn compile(
                 stderr,
                 ..
             }) => {
-                assert_eq!(
-                    exit_code,
-                    0,
-                    "PCH build failed: {}",
-                    String::from_utf8_lossy(&stderr)
-                );
                 eprintln!(
                     "--- session log after compile (cached={cached}) ---\n{}",
                     log_text(checkout)
                 );
-                return cached;
+                return (
+                    exit_code,
+                    cached,
+                    String::from_utf8_lossy(&stderr).into_owned(),
+                );
             }
             other => panic!("expected CompileResult, got: {other:?}"),
         }
@@ -573,5 +601,104 @@ async fn chained_pch_is_served_with_base_mtime_replay() {
     assert_ne!(mtime_secs(&checkout.pch()), TOUCHED_SECS);
     let (ok, stderr) = consume_top();
     assert!(ok, "served chain must load: {stderr}");
+    daemon.stop().await;
+}
+
+/// A PCH already on disk, loaded by a compile zccache runs: the build tool
+/// never re-runs the PCH step (its output looks current), so zccache must
+/// repair the drifted header before clang loads the PCH. Covers a touch
+/// forwards (checkout, editor save) and backwards (cache/tar restore).
+async fn loaded_pch_is_repaired_before_the_consumer_runs(drifted_secs: i64) {
+    let Some(clang) = zccache::test_support::find_clang() else {
+        eprintln!("skipping test: clang not found");
+        return;
+    };
+    let checkout = Checkout::new();
+    let daemon = Daemon::start().await;
+    let mut client = zccache::ipc::connect(&daemon.endpoint).await.unwrap();
+    let sid = start_session(&mut client, &checkout).await;
+    let include = checkout.default_include();
+    build_pch(&mut client, &sid, &clang, &checkout, &include, None).await;
+    let pch_bytes = std::fs::read(checkout.pch()).unwrap();
+    if !records_xxh3(&checkout, &pch_bytes) {
+        daemon.stop().await;
+        return;
+    }
+    set_mtime(&checkout.header(), drifted_secs);
+    let (ok, stderr) = checkout.consume(&clang);
+    assert!(
+        !ok,
+        "negative control: the drifted header should break bare clang"
+    );
+    assert!(stderr.contains("redefinition"), "stderr:\n{stderr}");
+    settle();
+
+    let args = checkout.consumer_args();
+    compile(&mut client, &sid, &clang, &checkout, args, None).await;
+    assert_eq!(mtime_secs(&checkout.header()), RECORDED_SECS);
+    assert_eq!(
+        std::fs::read(checkout.pch()).unwrap(),
+        pch_bytes,
+        "the on-disk PCH is never modified"
+    );
+    let log = log_text(&checkout);
+    assert!(log.contains("for loaded"), "log:\n{log}");
+    daemon.stop().await;
+}
+
+#[tokio::test]
+#[ignore] // integration: spawns clang + watcher sleeps, run with --full
+async fn loaded_pch_header_touched_forwards_is_repaired() {
+    loaded_pch_is_repaired_before_the_consumer_runs(TOUCHED_SECS).await;
+}
+
+#[tokio::test]
+#[ignore] // integration: spawns clang + watcher sleeps, run with --full
+async fn loaded_pch_header_moved_backwards_is_repaired() {
+    loaded_pch_is_repaired_before_the_consumer_runs(RECORDED_SECS - 86_400).await;
+}
+
+/// A real edit to a header the loaded PCH records is never papered over:
+/// zccache leaves the file alone and clang's strict validation rejects the
+/// PCH. Replay switched off leaves an identical touched header alone too.
+#[tokio::test]
+#[ignore] // integration: spawns clang + watcher sleeps, run with --full
+async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
+    let Some(clang) = zccache::test_support::find_clang() else {
+        eprintln!("skipping test: clang not found");
+        return;
+    };
+    let checkout = Checkout::new();
+    let daemon = Daemon::start().await;
+    let mut client = zccache::ipc::connect(&daemon.endpoint).await.unwrap();
+    let sid = start_session(&mut client, &checkout).await;
+    let include = checkout.default_include();
+    build_pch(&mut client, &sid, &clang, &checkout, &include, None).await;
+    let pch_bytes = std::fs::read(checkout.pch()).unwrap();
+    if !records_xxh3(&checkout, &pch_bytes) {
+        daemon.stop().await;
+        return;
+    }
+
+    // Replay off: the touched header keeps its new mtime.
+    set_mtime(&checkout.header(), TOUCHED_SECS);
+    settle();
+    let args = checkout.consumer_args();
+    let (exit_code, _, _) =
+        compile_outcome(&mut client, &sid, &clang, &checkout, args, Some("0")).await;
+    assert_ne!(exit_code, 0, "replay off: clang must still reject the PCH");
+    assert_eq!(mtime_secs(&checkout.header()), TOUCHED_SECS);
+
+    // Same-size real edit: refused, never replayed.
+    std::fs::write(checkout.header(), HEADER.replace("v1", "v2")).unwrap();
+    set_mtime(&checkout.header(), TOUCHED_SECS);
+    settle();
+    let args = checkout.consumer_args();
+    let (exit_code, _, _) = compile_outcome(&mut client, &sid, &clang, &checkout, args, None).await;
+    assert_ne!(exit_code, 0, "an edited header must invalidate the PCH");
+    assert_eq!(mtime_secs(&checkout.header()), TOUCHED_SECS);
+    let log = log_text(&checkout);
+    assert!(log.contains("[PCH_NOT_REPAIRED]"), "log:\n{log}");
+    assert!(log.contains("content_mismatch"), "log:\n{log}");
     daemon.stop().await;
 }

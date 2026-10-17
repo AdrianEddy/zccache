@@ -479,3 +479,22 @@ fn legacy_hashes_never_replay() {
     );
     assert_eq!(mtime_secs_of(&fixture.header()), touched.unix_seconds());
 }
+
+#[test]
+fn stat_match_detects_drift_in_either_direction() {
+    let Some(clang) = clang() else { return };
+    let fixture = build_fixture(clang);
+    assert!(inputs_stat_match(&fixture.inputs()));
+    set_file_mtime(&fixture.header(), FileTime::now()).unwrap();
+    assert!(!inputs_stat_match(&fixture.inputs()));
+    set_file_mtime(
+        &fixture.header(),
+        FileTime::from_unix_time(OLD_SECS - 60, 0),
+    )
+    .unwrap();
+    assert!(!inputs_stat_match(&fixture.inputs()));
+    set_file_mtime(&fixture.header(), FileTime::from_unix_time(OLD_SECS, 0)).unwrap();
+    assert!(inputs_stat_match(&fixture.inputs()));
+    fs::remove_file(fixture.header()).unwrap();
+    assert!(!inputs_stat_match(&fixture.inputs()));
+}

@@ -328,6 +328,24 @@ pub fn plan_pch_serve(
     Ok(plan)
 }
 
+/// Whether every recorded input still has the size and mtime clang
+/// recorded, so loading this PCH needs no repair. Stats only, no hashing:
+/// the cheap check run before every compile that loads a PCH.
+#[must_use]
+pub fn inputs_stat_match(inputs: &[PchInput]) -> bool {
+    inputs
+        .iter()
+        .filter(|input| !input.overridden && !input.transient)
+        .all(|input| {
+            std::fs::metadata(&input.path).is_ok_and(|meta| {
+                meta.is_file()
+                    && meta.len() == input.size
+                    && (input.mtime_secs == 0
+                        || u64::try_from(mtime_secs(&meta)).ok() == Some(input.mtime_secs))
+            })
+        })
+}
+
 /// Apply the replays of a [`PchServePlan`]: give each input its recorded
 /// mtime, then re-verify its size and content.
 ///

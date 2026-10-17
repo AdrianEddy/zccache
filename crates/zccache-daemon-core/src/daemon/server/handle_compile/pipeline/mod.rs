@@ -798,6 +798,15 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
         ),
     );
 
+    // #1952: a PCH this compile loads must match its recorded inputs.
+    super::pch_gate::repair_loaded_pch_inputs(
+        state,
+        &sid,
+        &ctx.force_includes,
+        default_key_root.as_path(),
+        client_env.as_deref(),
+    );
+
     // ── Phase: compiler exec ────────────────────────────────────────
     let exec_result = run_compile_exec(CompileExecRequest {
         state_arc,

@@ -22,8 +22,8 @@
 use super::super::*;
 use super::cached_hit::CachedHitFailure;
 use crate::fingerprint::pch_inputs::{
-    apply_pch_replay, parse_pch_inputs, plan_pch_serve, read_pch_inputs, PchInputsError,
-    PchServeOptions,
+    apply_pch_replay, inputs_stat_match, parse_pch_inputs, plan_pch_serve, read_pch_inputs,
+    PchInputsError, PchServeOptions,
 };
 
 /// Serializes PCH gate + materialization across concurrent hits.
@@ -134,6 +134,84 @@ pub(super) fn gate_cached_pch(
         );
     }
     Ok(guard)
+}
+
+/// The PCH binaries a compile loads: every `-include-pch` / `.gch` force
+/// include, plus the `<header>.pch` clang substitutes for `-include <header>`.
+fn loaded_pchs(force_includes: &[NormalizedPath]) -> Vec<NormalizedPath> {
+    let mut pchs: Vec<NormalizedPath> = Vec::new();
+    for path in force_includes {
+        let candidate = if is_pch_output(path) {
+            path.clone()
+        } else {
+            let mut implicit = path.as_os_str().to_owned();
+            implicit.push(".pch");
+            NormalizedPath::new(Path::new(&implicit))
+        };
+        if candidate.is_file() && !pchs.contains(&candidate) {
+            pchs.push(candidate);
+        }
+    }
+    pchs
+}
+
+/// Repair the inputs of every PCH a compile is about to load (#1952).
+///
+/// A PCH already on disk breaks exactly like a served one when an identical
+/// header's mtime moved (checkout, cache restore, `touch`), and a build tool
+/// that thinks the PCH is current never asks zccache to rebuild it. So before
+/// clang runs, each loaded PCH's records are checked: a stat-only pass when
+/// nothing drifted, else the same content-verified replay as a served PCH.
+/// A real change is left alone for clang's own validation to reject; this
+/// never fails the compile.
+pub(in crate::daemon::server) fn repair_loaded_pch_inputs(
+    state: &SharedState,
+    sid: &SessionId,
+    force_includes: &[NormalizedPath],
+    replay_root: &Path,
+    client_env: Option<&[(String, String)]>,
+) {
+    if force_includes.is_empty() || !replay_enabled_for(client_env) {
+        return;
+    }
+    for pch in loaded_pchs(force_includes) {
+        let Ok(Some(inputs)) = read_pch_inputs(&pch) else {
+            continue;
+        };
+        if inputs_stat_match(&inputs) {
+            continue;
+        }
+        let _guard = PCH_SERVE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let log = |line: String| write_session_log(&state.sessions, sid, &line);
+        let outcome = plan_pch_serve(
+            &inputs,
+            PchServeOptions {
+                replay_root,
+                expected_top_level: None,
+                replay_enabled: true,
+            },
+        )
+        .and_then(|plan| apply_pch_replay(&plan));
+        match outcome {
+            Ok(applied) => {
+                for replay in &applied {
+                    log(format!(
+                        "[PCH_MTIME_REPLAY] {} mtime {} -> {} (content verified) for loaded {}",
+                        replay.path.display(),
+                        replay.current_secs,
+                        replay.recorded_secs,
+                        pch.display()
+                    ));
+                }
+            }
+            Err(refusal) => log(format!(
+                "[PCH_NOT_REPAIRED] loaded {} input {refusal}",
+                pch.display()
+            )),
+        }
+    }
 }
 
 /// `ZCCACHE_PCH_MTIME_REPLAY` from the requesting client's environment.
