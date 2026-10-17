@@ -332,8 +332,60 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    fn unavailable_compiler(reason: &str, required: bool) {
+        assert!(
+            !required,
+            "ZCCACHE_PCH_TESTS_REQUIRED=1 requires Clang >= 19 for provenance tests: {reason}"
+        );
+        eprintln!("skipping PCH provenance fixture: {reason}");
+    }
+
+    fn clang_compiler() -> Option<&'static NormalizedPath> {
+        static COMPILER: std::sync::OnceLock<Result<NormalizedPath, String>> =
+            std::sync::OnceLock::new();
+        let result = COMPILER.get_or_init(|| {
+            let compiler = crate::test_support::find_clang()
+                .ok_or_else(|| "Clang compiler is unavailable".to_owned())?;
+            let output = Command::new(&compiler)
+                .arg("--version")
+                .output()
+                .map_err(|error| format!("{}: {error}", compiler.display()))?;
+            let version = String::from_utf8_lossy(&output.stdout);
+            let major = version
+                .split("version ")
+                .nth(1)
+                .and_then(|version| version.split('.').next())
+                .and_then(|major| major.parse::<u32>().ok());
+            if !output.status.success() || major.is_none_or(|major| major < 19) {
+                return Err(format!(
+                    "{} does not provide supported Clang >= 19: {}",
+                    compiler.display(),
+                    version.trim()
+                ));
+            }
+            Ok(compiler)
+        });
+        match result {
+            Ok(compiler) => Some(compiler),
+            Err(reason) => {
+                unavailable_compiler(
+                    reason,
+                    std::env::var("ZCCACHE_PCH_TESTS_REQUIRED").as_deref() == Ok("1"),
+                );
+                None
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "ZCCACHE_PCH_TESTS_REQUIRED=1 requires Clang >= 19")]
+    fn required_missing_compiler_is_a_failure() {
+        unavailable_compiler("Clang compiler is unavailable", true);
+    }
+
     fn clang(root: &Path, args: &[&str]) {
-        let output = Command::new("clang++")
+        let compiler = clang_compiler().expect("fixture must establish compiler prerequisites");
+        let output = Command::new(compiler)
             .current_dir(root)
             .args(args)
             .args([
@@ -350,7 +402,8 @@ mod tests {
         );
     }
 
-    fn fixture() -> tempfile::TempDir {
+    fn fixture() -> Option<tempfile::TempDir> {
+        clang_compiler()?;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         std::fs::write(
@@ -387,12 +440,12 @@ mod tests {
                 "-verify-pch",
             ],
         );
-        directory
+        Some(directory)
     }
 
     #[test]
     fn producer_recording_requires_executed_import_snapshot() {
-        let directory = fixture();
+        let Some(directory) = fixture() else { return };
         let root = directory.path();
         let top = root.join("top.pch");
         assert!(
@@ -403,7 +456,7 @@ mod tests {
 
     #[test]
     fn cached_parent_requires_bound_original_manifest() {
-        let directory = fixture();
+        let Some(directory) = fixture() else { return };
         let root = directory.path();
         let pch = root.join("top.pch");
         record_pch_imports(&pch, None).unwrap();
@@ -421,7 +474,7 @@ mod tests {
 
     #[test]
     fn imported_hashes_freeze_verified_bytes_without_rewinding_original() {
-        let directory = fixture();
+        let Some(directory) = fixture() else { return };
         let root = directory.path();
         let top = root.join("top.pch");
         let base = root.join("base.pch");
@@ -451,7 +504,7 @@ mod tests {
 
     #[test]
     fn recording_uses_frozen_import_despite_same_size_same_mtime_replacement() {
-        let directory = fixture();
+        let Some(directory) = fixture() else { return };
         let root = directory.path();
         let base = root.join("base.pch");
         let top = root.join("top.pch");
@@ -519,7 +572,7 @@ mod tests {
 
     #[test]
     fn producer_without_imports_clears_obsolete_companion() {
-        let directory = fixture();
+        let Some(directory) = fixture() else { return };
         let root = directory.path();
         let logical = root.join("top.pch");
         record_pch_imports(&logical, None).unwrap();
@@ -534,42 +587,8 @@ mod tests {
 
     #[test]
     fn same_size_rebuilt_import_cannot_inherit_old_parent_provenance() {
-        let directory = tempfile::tempdir().unwrap();
+        let Some(directory) = fixture() else { return };
         let root = directory.path();
-        std::fs::write(
-            root.join("base.h"),
-            "#pragma once\nconstexpr int value = 1;\nstruct A { int x; };\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("top.h"),
-            "#pragma once\nconstexpr int top_value = value;\n",
-        )
-        .unwrap();
-        clang(
-            root,
-            &[
-                "-x",
-                "c++-header",
-                "base.h",
-                "-o",
-                "base.pch",
-                "-verify-pch",
-            ],
-        );
-        clang(
-            root,
-            &[
-                "-x",
-                "c++-header",
-                "top.h",
-                "-include-pch",
-                "base.pch",
-                "-o",
-                "top.pch",
-                "-verify-pch",
-            ],
-        );
         let original = std::fs::read(root.join("base.pch")).unwrap();
         record_pch_imports(&root.join("top.pch"), None).unwrap();
         std::fs::write(

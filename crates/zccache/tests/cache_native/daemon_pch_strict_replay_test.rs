@@ -28,6 +28,19 @@ use kernal_api::platform::fs::{set_file_mtime, FileTime};
 use zccache::daemon::DaemonServer;
 use zccache::protocol::{Request, Response};
 
+fn pch_tests_required() -> bool {
+    std::env::var("ZCCACHE_PCH_TESTS_REQUIRED").as_deref() == Ok("1")
+}
+
+fn find_pch_test_clang() -> Option<zccache::core::NormalizedPath> {
+    let compiler = zccache::test_support::find_clang();
+    assert!(
+        compiler.is_some() || !pch_tests_required(),
+        "required PCH regressions need clang >=19; run the pinned CI toolchain step"
+    );
+    compiler
+}
+
 /// `canonicalize` without Windows' `\\?\` verbatim prefix, which clang
 /// never records.
 fn canonical(path: &Path) -> std::io::Result<PathBuf> {
@@ -326,10 +339,18 @@ fn records_xxh3(checkout: &Checkout, pch_bytes: &[u8]) -> bool {
     let header = checkout.root.join("pch.h");
     let inputs = parse_pch_inputs(pch_bytes).unwrap().unwrap();
     let Some(record) = inputs.iter().find(|input| Path::new(&input.path) == header) else {
+        assert!(
+            !pch_tests_required(),
+            "required PCH regression could not find its input record"
+        );
         return false;
     };
     let xxh3 = record.content_xxh3 == Some(content_xxh3(&std::fs::read(&header).unwrap()));
     if !xxh3 {
+        assert!(
+            !pch_tests_required(),
+            "required PCH regressions need clang >=19 with xxh3 input hashes"
+        );
         eprintln!("skipping: this clang does not record xxh3 input hashes");
     }
     xxh3
@@ -343,7 +364,7 @@ fn log_text(checkout: &Checkout) -> String {
 /// was touched breaks the consumer with the redefinition error.
 #[tokio::test]
 async fn touched_header_without_replay_breaks_the_consumer() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -361,7 +382,7 @@ async fn touched_header_without_replay_breaks_the_consumer() {
 
 #[tokio::test]
 async fn touched_identical_header_is_served_without_changing_source_mtime() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -395,7 +416,7 @@ async fn touched_identical_header_is_served_without_changing_source_mtime() {
 
 #[tokio::test]
 async fn touched_header_with_replay_disabled_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -439,7 +460,7 @@ async fn touched_header_with_replay_disabled_is_a_miss() {
 
 #[tokio::test]
 async fn same_size_content_edit_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -464,7 +485,7 @@ async fn same_size_content_edit_is_a_miss() {
 
 #[tokio::test]
 async fn size_change_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -482,7 +503,7 @@ async fn size_change_is_a_miss() {
 
 #[tokio::test]
 async fn different_include_spelling_is_a_miss() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -498,7 +519,7 @@ async fn different_include_spelling_is_a_miss() {
 
 #[tokio::test]
 async fn pch_from_another_checkout_is_refused() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -527,7 +548,7 @@ async fn pch_from_another_checkout_is_refused() {
 /// chain must replay the recorded one or clang rejects the chain.
 #[tokio::test]
 async fn chained_pch_is_served_with_base_mtime_replay() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -621,7 +642,7 @@ async fn chained_pch_is_served_with_base_mtime_replay() {
 /// repair the drifted header before clang loads the PCH. Covers a touch
 /// forwards (checkout, editor save) and backwards (cache/tar restore).
 async fn loaded_pch_is_repaired_before_the_consumer_runs(drifted_secs: i64) {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -673,7 +694,7 @@ async fn loaded_pch_header_moved_backwards_is_repaired() {
 /// PCH. Replay switched off leaves an identical touched header alone too.
 #[tokio::test]
 async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         eprintln!("skipping test: clang not found");
         return;
     };
@@ -715,7 +736,7 @@ async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
 #[cfg(unix)]
 #[tokio::test]
 async fn cached_pch_does_not_hide_reverted_content_from_another_ninja_build() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         return;
     };
     let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
@@ -803,7 +824,7 @@ async fn cached_pch_does_not_hide_reverted_content_from_another_ninja_build() {
 /// Caller VFS overlays need no composition when PCH inputs still match.
 #[tokio::test]
 async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         return;
     };
     let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
@@ -841,7 +862,7 @@ async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
 #[cfg(unix)]
 #[tokio::test]
 async fn private_pch_view_preserves_header_identity_across_aliases() {
-    let Some(clang) = zccache::test_support::find_clang() else {
+    let Some(clang) = find_pch_test_clang() else {
         return;
     };
     let (checkout, daemon, mut client, sid, original_pch) = cold_build(&clang).await;
