@@ -835,9 +835,9 @@ Response-file arguments are checked after expansion by the daemon.
 
 ### Precompiled headers under strict validation
 
-zccache serves a cached clang PCH only when every input header the PCH
-recorded (spelling, size, content hash, mtime) matches the workspace, so it
-works with strict PCH flags and timestamps on:
+zccache checks the input paths, sizes, and content hashes recorded inside
+cached clang PCHs. Both producers and consumers run through zccache with
+strict PCH flags and timestamps enabled:
 
 ```bash
 # producer
@@ -848,16 +848,20 @@ zccache clang++ -c src/a.cpp -include-pch build/pch.h.pch \
   -Werror=invalid-pch -fpch-validate-input-files-content
 ```
 
-A missing input or a size or content change rebuilds the PCH. When a header is
-byte-identical but its mtime moved (a checkout, `git stash`, an editor save),
-zccache sets that header's mtime back to the value the PCH recorded and logs
-it, because clang's `#pragma once` lookup would otherwise parse the header
-twice (`redefinition of ...`). The same repair runs before any compile that
-loads a PCH already on disk, so a header whose mtime moved backwards after a
-cache restore is fixed too. Only headers under the build's checkout root are
-touched, and only with clang >= 19, which records xxh3 content hashes; older
-clang rebuilds instead. Set `ZCCACHE_PCH_MTIME_REPLAY=0` to rebuild the PCH
-instead. Details:
+Missing or changed inputs rebuild the PCH. Identical headers with changed
+mtimes can reuse it: the consuming compiler gets a private VFS overlay with
+independent, content-verified snapshots carrying the recorded timestamps.
+Original headers and imported PCH files keep their timestamps. Rewinding a
+shared source file would hide edits from other Ninja build directories.
+
+Snapshots also cover chained PCHs and implicit `-include header.h` loading.
+Chained producers freeze their imported PCHs before execution and cache a
+content-bound `.zccache-imports.json` companion with the parent PCH.
+Dependency files and `__FILE__` keep the original paths; private snapshots
+exist only until the compiler exits. Consumers must run through zccache to
+receive this view. clang >= 19 records verifiable xxh3 hashes; older clang
+rebuilds when timestamps differ. `ZCCACHE_PCH_MTIME_REPLAY=0` disables timestamp
+repair and makes a touched PCH producer rebuild instead. Details:
 [artifact-store.md](docs/architecture/artifact-store.md#strict-pch-serving-1952).
 
 ### Compiler child priority

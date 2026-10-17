@@ -1,4 +1,4 @@
-//! Strict PCH input validation with content-verified mtime replay (#1952).
+//! Strict PCH input validation with compiler-private timestamp views.
 //!
 //! A clang PCH records, for every input header, the spelling, size and mtime
 //! (seconds) clang saw, plus an xxh3 hash of the content. A consumer that
@@ -23,14 +23,18 @@
 //! - path missing or not a regular file: refuse;
 //! - size differs: refuse (checked before hashing);
 //! - content differs from the recorded hash: refuse;
-//! - content identical but mtime differs: set the header's mtime back to the
-//!   recorded value ([`apply_pch_replay`]), then serve. Only files under the
-//!   caller's replay root are ever touched, and only when replay is enabled.
+//! - content identical but mtime differs: snapshot the input into a private
+//!   VFS overlay with the recorded timestamp, then serve. Source files are
+//!   never modified: changing their timestamps can hide edits from other
+//!   build directories. Only inputs under the replay root are eligible.
 //!
 //! Every failure biases toward rebuilding: a refusal makes the caller compile
 //! the PCH fresh, which is always correct.
 
 mod bitstream;
+mod overlay;
+
+pub use overlay::write_pch_overlay;
 
 use std::io::Read;
 use std::path::Path;
@@ -49,8 +53,9 @@ pub struct PchInput {
     pub size: u64,
     /// Modification time (whole seconds since the epoch) clang recorded.
     pub mtime_secs: u64,
-    /// The recorded content hash, when clang recorded one: xxh3-64 for
-    /// clang >= 19, an unrecomputable `llvm::hash_code` before that.
+    /// The recorded xxh3-64 content hash for clang >= 19. Older clang
+    /// hashes cannot be recomputed and are represented as `None`. Callers
+    /// enrich imported PCH records with verified producer-bound xxh3 hashes.
     pub content_xxh3: Option<u64>,
     /// The input was a virtual (remapped) buffer, not a file on disk.
     pub overridden: bool,
@@ -60,8 +65,9 @@ pub struct PchInput {
     pub top_level: bool,
     /// This is an imported PCH (a chained PCH's `-include-pch` base) from
     /// the `CONTROL_BLOCK` `IMPORT` record, not a header. clang records only
-    /// its size and mtime; its content is part of the cache key, which
-    /// hashes a PCH dependency's bytes on every lookup.
+    /// its size and mtime for ordinary PCHs. Before snapshotting, the daemon
+    /// supplies an expected content hash bound to the parent's producer
+    /// provenance, or to the immutable PCH view frozen for a new producer.
     pub imported_pch: bool,
 }
 
@@ -126,16 +132,16 @@ pub enum PchRefusalReason {
     /// The mtime differs, content matches, but replay is turned off.
     ReplayDisabled,
     /// The mtime differs, content matches, but the file is outside the
-    /// replay root, so zccache will not touch it.
+    /// replay root, so zccache will not snapshot it.
     OutsideReplayRoot,
     /// The PCH's own header is not the header this compile names: the PCH
     /// was built in another checkout or from another spelling.
     TopLevelMismatch,
     /// Reading or hashing the input failed.
     Unreadable(String),
-    /// Setting the recorded mtime failed.
+    /// Writing the private timestamp view failed.
     ReplayFailed(String),
-    /// The input changed while its mtime was being replayed.
+    /// The input changed between planning and snapshotting, or plans conflict.
     ChangedDuringReplay,
 }
 
@@ -172,38 +178,84 @@ impl std::fmt::Display for PchRefusal {
     }
 }
 
-/// An input whose content verified but whose mtime must be set back.
+/// An input whose verified content needs a compiler-private timestamp view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingReplay {
     pub path: NormalizedPath,
-    /// The mtime clang recorded, which the file will be given.
+    /// The mtime clang recorded, which its private snapshot will be given.
     pub recorded_secs: u64,
     /// The mtime the file had when it was verified.
     pub current_secs: i64,
     size: u64,
-    /// `None` for an imported PCH, which is re-checked by size only.
+    /// Imported PCH plans may lack this until the caller supplies verified
+    /// producer provenance; the overlay writer refuses any missing identity.
     content_xxh3: Option<u64>,
 }
 
 /// The outcome of [`plan_pch_serve`]: the PCH may be served once every
-/// pending replay has been applied.
+/// pending replay has been materialized in a private overlay.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PchServePlan {
     /// Inputs that were checked against the workspace.
     pub inputs_checked: usize,
-    /// Inputs whose mtime must be set to the recorded value.
+    /// Inputs whose private snapshot needs the recorded mtime.
     pub replays: Vec<PendingReplay>,
+}
+
+impl PchServePlan {
+    /// Freeze a loaded PCH for a producer even when its timestamp matches.
+    /// The caller supplies the xxh3 of the exact captured bytes; snapshot
+    /// creation verifies that identity again before exposing it to clang.
+    pub fn require_snapshot(&mut self, input: &PchInput) -> Result<(), PchRefusal> {
+        let path = Path::new(&input.path);
+        if !path.is_absolute() {
+            return Err(refuse(input, PchRefusalReason::RelativePath));
+        }
+        let hash = input
+            .content_xxh3
+            .ok_or_else(|| refuse(input, PchRefusalReason::MtimeUnverifiable))?;
+        let metadata =
+            std::fs::metadata(path).map_err(|_| refuse(input, PchRefusalReason::Missing))?;
+        if !metadata.is_file() || metadata.len() != input.size {
+            return Err(refuse(
+                input,
+                PchRefusalReason::SizeMismatch {
+                    recorded: input.size,
+                    actual: metadata.len(),
+                },
+            ));
+        }
+        let path = NormalizedPath::new(path);
+        if let Some(previous) = self.replays.iter().find(|pending| pending.path == path) {
+            return if previous.recorded_secs == input.mtime_secs
+                && previous.size == input.size
+                && previous.content_xxh3 == Some(hash)
+            {
+                Ok(())
+            } else {
+                Err(refuse(input, PchRefusalReason::ChangedDuringReplay))
+            };
+        }
+        self.replays.push(PendingReplay {
+            path,
+            recorded_secs: input.mtime_secs,
+            current_secs: mtime_secs(&metadata),
+            size: input.size,
+            content_xxh3: Some(hash),
+        });
+        Ok(())
+    }
 }
 
 /// How [`plan_pch_serve`] treats the workspace.
 #[derive(Clone, Copy, Debug)]
 pub struct PchServeOptions<'a> {
-    /// Only files under this directory may have their mtime replayed.
+    /// Only files under this directory may enter a timestamp overlay.
     pub replay_root: &'a Path,
     /// The header this compile precompiles. When set, the PCH's top-level
     /// input must be this same file.
     pub expected_top_level: Option<&'a Path>,
-    /// Whether an mtime-only mismatch may be repaired by replay.
+    /// Whether an mtime-only mismatch may use a private timestamp overlay.
     pub replay_enabled: bool,
 }
 
@@ -228,7 +280,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// Check every recorded input of a cached PCH against the workspace and
 /// return the mtime replays needed to serve it, or the first refusal.
 ///
-/// Nothing is modified here; [`apply_pch_replay`] performs the replays.
+/// Nothing is modified here; [`write_pch_overlay`] materializes snapshots.
 pub fn plan_pch_serve(
     inputs: &[PchInput],
     options: PchServeOptions<'_>,
@@ -279,14 +331,6 @@ pub fn plan_pch_serve(
         };
         checked.push((input, mtime_secs(&meta), xxh3_matches));
     }
-    // clang >= 19 stores xxh3-64 in INPUT_FILE_HASH; older clang stores an
-    // `llvm::hash_code`, which cannot be recomputed here. One matching input
-    // proves the PCH uses xxh3 (a 64-bit coincidence is negligible), so every
-    // mismatch is then a real content change. Otherwise the hashes are
-    // unusable: inputs fall back to clang's own size + mtime check and an
-    // mtime mismatch cannot be verified, so it is refused (never replayed).
-    let hashes_are_xxh3 = checked.iter().any(|(_, _, matches)| *matches == Some(true));
-
     // Pass 2: decide each input.
     let mut plan = PchServePlan {
         inputs_checked: checked.len(),
@@ -296,15 +340,15 @@ pub fn plan_pch_serve(
         // clang skips the timestamp check for a zero recorded mtime.
         let mtime_matches =
             input.mtime_secs == 0 || u64::try_from(current_secs).ok() == Some(input.mtime_secs);
-        let verified_hash = match (xxh3_matches, hashes_are_xxh3) {
-            (Some(false), true) => {
+        let verified_hash = match xxh3_matches {
+            Some(false) => {
                 return Err(refuse(input, PchRefusalReason::ContentMismatch));
             }
-            (Some(true), true) => input.content_xxh3,
+            Some(true) => input.content_xxh3,
             _ if mtime_matches => None,
             // An imported PCH has no content hash; its bytes are part of
             // the cache key, which hashes PCH dependencies on every lookup.
-            (None, _) if input.imported_pch => None,
+            None if input.imported_pch => None,
             _ => return Err(refuse(input, PchRefusalReason::MtimeUnverifiable)),
         };
         if mtime_matches {
@@ -346,51 +390,6 @@ pub fn inputs_stat_match(inputs: &[PchInput]) -> bool {
         })
 }
 
-/// Apply the replays of a [`PchServePlan`]: give each input its recorded
-/// mtime, then re-verify its size and content.
-///
-/// If an input changed between verification and replay, its mtime is set to
-/// now so build tools see it as newer than anything built from it, and the
-/// PCH must not be served. Returns the replays applied.
-pub fn apply_pch_replay(plan: &PchServePlan) -> Result<Vec<PendingReplay>, PchRefusal> {
-    apply_pch_replay_with(plan, kernal_api::platform::fs::set_file_mtime)
-}
-
-fn apply_pch_replay_with(
-    plan: &PchServePlan,
-    set_time: impl Fn(&Path, FileTime) -> std::io::Result<()>,
-) -> Result<Vec<PendingReplay>, PchRefusal> {
-    let refusal = |replay: &PendingReplay, reason| PchRefusal {
-        path: replay.path.to_string_lossy().into_owned(),
-        reason,
-    };
-    for replay in &plan.replays {
-        let recorded =
-            FileTime::from_unix_time(i64::try_from(replay.recorded_secs).unwrap_or(i64::MAX), 0);
-        set_time(&replay.path, recorded)
-            .map_err(|error| refusal(replay, PchRefusalReason::ReplayFailed(error.to_string())))?;
-        let unchanged = match replay.content_xxh3 {
-            Some(hash) => std::fs::read(&replay.path).is_ok_and(|bytes| {
-                bytes.len() as u64 == replay.size && content_xxh3(&bytes) == hash
-            }),
-            None => std::fs::metadata(&replay.path).is_ok_and(|meta| meta.len() == replay.size),
-        };
-        if !unchanged {
-            // Bias toward rebuilding: whatever changed must look newer than
-            // every output built from the old content.
-            if let Err(error) = set_time(&replay.path, FileTime::now()) {
-                tracing::warn!(
-                    path = %replay.path.display(),
-                    %error,
-                    "could not mark a PCH input changed during replay as new"
-                );
-            }
-            return Err(refusal(replay, PchRefusalReason::ChangedDuringReplay));
-        }
-    }
-    Ok(plan.replays.clone())
-}
-
 /// Whether the client environment turns PCH input mtime replay off.
 ///
 /// `ZCCACHE_PCH_MTIME_REPLAY` is on by default; `0`, `false`, `off` or `no`
@@ -411,3 +410,6 @@ pub const PCH_MTIME_REPLAY_ENV: &str = "ZCCACHE_PCH_MTIME_REPLAY";
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod overlay_tests;

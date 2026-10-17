@@ -217,10 +217,11 @@ fn untouched_inputs_serve_without_replay() {
 }
 
 #[test]
-fn touched_identical_header_is_replayed_to_recorded_mtime() {
+fn touched_identical_header_uses_private_overlay_for_strict_consumer() {
     let Some(clang) = xxh3_clang() else { return };
     let fixture = build_fixture(clang);
     set_file_mtime(&fixture.header(), FileTime::now()).unwrap();
+    let touched = FileTime::from_last_modification_time(&fs::metadata(fixture.header()).unwrap());
 
     let planned = plan(&fixture, true).unwrap();
     assert_eq!(planned.replays.len(), 1);
@@ -230,10 +231,106 @@ fn touched_identical_header_is_replayed_to_recorded_mtime() {
     );
     assert_eq!(planned.replays[0].recorded_secs, OLD_SECS as u64);
 
-    let applied = apply_pch_replay(&planned).unwrap();
-    assert_eq!(applied.len(), 1);
-    assert_eq!(mtime_secs_of(&fixture.header()), OLD_SECS);
-    assert!(plan(&fixture, true).unwrap().replays.is_empty());
+    let private = tempfile::tempdir().unwrap();
+    let overlay = write_pch_overlay(&planned, private.path()).unwrap();
+    fs::write(
+        fixture.root().join("consumer.cpp"),
+        "#include \"a.h\"\nB<> b;\nA a;\n",
+    )
+    .unwrap();
+    let output = Command::new(clang)
+        .current_dir(fixture.root())
+        .args([
+            "-c",
+            "consumer.cpp",
+            "-Iinc",
+            "-include-pch",
+            "pch.h.pch",
+            "-Werror=invalid-pch",
+            "-fpch-validate-input-files-content",
+            "-MD",
+            "-MF",
+            "consumer.d",
+            "-o",
+            "consumer.o",
+            "-ivfsoverlay",
+        ])
+        .arg(overlay)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        FileTime::from_last_modification_time(&fs::metadata(fixture.header()).unwrap()),
+        touched
+    );
+    assert_eq!(plan(&fixture, true).unwrap().replays.len(), 1);
+    let dependencies = fs::read_to_string(fixture.root().join("consumer.d")).unwrap();
+    assert!(dependencies.contains("a.h"), "{dependencies}");
+    assert!(!dependencies.contains("input-0"), "{dependencies}");
+}
+
+#[test]
+fn replay_must_preserve_source_nanosecond_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let header = dir.path().join("source.h");
+    fs::write(&header, b"#pragma once\n").unwrap();
+    let touched = FileTime::from_unix_time(OLD_SECS + 100, 123_456_789);
+    set_file_mtime(&header, touched).unwrap();
+    let touched = FileTime::from_last_modification_time(&fs::metadata(&header).unwrap());
+    let plan = PchServePlan {
+        inputs_checked: 1,
+        replays: vec![PendingReplay {
+            path: NormalizedPath::new(&header),
+            recorded_secs: OLD_SECS as u64,
+            current_secs: touched.unix_seconds(),
+            size: 13,
+            content_xxh3: Some(content_xxh3(b"#pragma once\n")),
+        }],
+    };
+    let private = tempfile::tempdir().unwrap();
+    write_pch_overlay(&plan, private.path()).unwrap();
+    assert_eq!(
+        FileTime::from_last_modification_time(&fs::metadata(&header).unwrap()),
+        touched
+    );
+}
+
+#[test]
+fn all_changed_inputs_must_be_refused_even_with_recorded_mtimes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical(directory.path()).unwrap();
+    let mut inputs = Vec::new();
+    for name in ["a.h", "b.h"] {
+        let path = root.join(name);
+        let original = b"int before;\n";
+        fs::write(&path, b"int after_;\n").unwrap();
+        set_file_mtime(&path, FileTime::from_unix_time(OLD_SECS, 0)).unwrap();
+        inputs.push(PchInput {
+            path: path.to_string_lossy().into_owned(),
+            as_requested: name.to_owned(),
+            size: original.len() as u64,
+            mtime_secs: OLD_SECS as u64,
+            content_xxh3: Some(content_xxh3(original)),
+            overridden: false,
+            transient: false,
+            top_level: false,
+            imported_pch: false,
+        });
+    }
+    let refusal = plan_pch_serve(
+        &inputs,
+        PchServeOptions {
+            replay_root: &root,
+            expected_top_level: None,
+            replay_enabled: true,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(refusal.reason, PchRefusalReason::ContentMismatch);
 }
 
 #[test]
@@ -329,22 +426,21 @@ fn pch_from_another_checkout_is_refused() {
 }
 
 #[test]
-fn change_during_replay_is_refused_and_left_newer() {
+fn change_between_plan_and_snapshot_is_refused_without_mtime_mutation() {
     let Some(clang) = xxh3_clang() else { return };
     let fixture = build_fixture(clang);
     set_file_mtime(&fixture.header(), FileTime::now()).unwrap();
     let planned = plan(&fixture, true).unwrap();
-    let header = fixture.header();
-    let refusal = apply_pch_replay_with(&planned, |path, time| {
-        if time.unix_seconds() == OLD_SECS {
-            // An editor saves between verification and replay.
-            fs::write(&header, "#pragma once\nstruct A { long x; };\n").unwrap();
-        }
-        set_file_mtime(path, time)
-    })
-    .unwrap_err();
+    fs::write(fixture.header(), "#pragma once\nstruct A { long x; };\n").unwrap();
+    let changed_time =
+        FileTime::from_last_modification_time(&fs::metadata(fixture.header()).unwrap());
+    let private = tempfile::tempdir().unwrap();
+    let refusal = write_pch_overlay(&planned, private.path()).unwrap_err();
     assert_eq!(refusal.reason, PchRefusalReason::ChangedDuringReplay);
-    assert!(mtime_secs_of(&fixture.header()) > OLD_SECS);
+    assert_eq!(
+        FileTime::from_last_modification_time(&fs::metadata(fixture.header()).unwrap()),
+        changed_time
+    );
 }
 
 #[test]
@@ -362,7 +458,7 @@ fn replay_env_defaults_on() {
 /// new mtime makes clang reject the chain ("module file has a different size
 /// or modification time"); replaying the recorded mtime repairs it.
 #[test]
-fn chained_pch_base_mtime_is_replayed() {
+fn chained_pch_base_uses_private_mtime_without_mutating_original() {
     let Some(clang) = clang() else { return };
     let fixture = build_fixture(clang);
     let root = fixture.root();
@@ -409,7 +505,7 @@ fn chained_pch_base_mtime_is_replayed() {
     let consume = || run(&["-c", "use.cpp", "-include-pch", "top.h.pch", "-o", "use.o"]);
     assert!(consume().0, "chain should load before any touch");
 
-    let inputs = match read_pch_inputs(&root.join("top.h.pch")) {
+    let mut inputs = match read_pch_inputs(&root.join("top.h.pch")) {
         Ok(inputs) => inputs.unwrap(),
         // An IMPORTS layout this reader does not know (some vendor clang):
         // the chained PCH is refused, which is a miss, never a wrong serve.
@@ -424,6 +520,12 @@ fn chained_pch_base_mtime_is_replayed() {
     assert_eq!(base.size, fs::metadata(fixture.pch()).unwrap().len());
 
     let recorded = base.mtime_secs;
+    let expected_base_hash = content_xxh3(&fs::read(fixture.pch()).unwrap());
+    inputs
+        .iter_mut()
+        .find(|input| input.imported_pch)
+        .unwrap()
+        .content_xxh3 = Some(expected_base_hash);
     set_file_mtime(
         &fixture.pch(),
         FileTime::from_unix_time(recorded as i64 + 100, 0),
@@ -444,9 +546,26 @@ fn chained_pch_base_mtime_is_replayed() {
     .unwrap();
     assert_eq!(planned.replays.len(), 1);
     assert_eq!(planned.replays[0].path, NormalizedPath::new(fixture.pch()));
-    apply_pch_replay(&planned).unwrap();
-    let (ok, stderr) = consume();
-    assert!(ok, "replayed chain should load: {stderr}");
+    let original_time =
+        FileTime::from_last_modification_time(&fs::metadata(fixture.pch()).unwrap());
+    let private = tempfile::tempdir().unwrap();
+    let overlay = write_pch_overlay(&planned, private.path()).unwrap();
+    let overlay = overlay.to_str().unwrap();
+    let (ok, stderr) = run(&[
+        "-c",
+        "use.cpp",
+        "-include-pch",
+        "top.h.pch",
+        "-o",
+        "use.o",
+        "-ivfsoverlay",
+        overlay,
+    ]);
+    assert!(ok, "overlay chain should load: {stderr}");
+    assert_eq!(
+        FileTime::from_last_modification_time(&fs::metadata(fixture.pch()).unwrap()),
+        original_time
+    );
 }
 
 /// A PCH whose hashes are not xxh3 (clang < 19 records an `llvm::hash_code`):
@@ -460,7 +579,7 @@ fn legacy_hashes_never_replay() {
         .inputs()
         .into_iter()
         .map(|mut input| {
-            input.content_xxh3 = input.content_xxh3.map(|hash| !hash);
+            input.content_xxh3 = None;
             input
         })
         .collect();

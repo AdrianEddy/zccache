@@ -346,6 +346,10 @@ pub(super) fn materialize_cached_compile_hit(
                     state,
                     sid,
                     payload,
+                    provenance: names
+                        .iter()
+                        .position(|name| name.ends_with(super::pch_provenance::SIDECAR_SUFFIX))
+                        .and_then(|index| payloads.get(index)),
                     source_path,
                     output_path,
                     replay_root: depfile_key_root.as_ref(),
@@ -420,7 +424,11 @@ pub(super) fn materialize_cached_compile_hit(
                         } else {
                             secondary_output_dir.join(&names[i])
                         }
-                    } else if i == 1 && payloads.len() == 2 {
+                    } else if super::pch_gate::is_pch_output(output_path)
+                        && names[i].ends_with(super::pch_provenance::SIDECAR_SUFFIX)
+                    {
+                        NormalizedPath::new(super::pch_provenance::sidecar_path(output_path))
+                    } else if i == 1 && current_depfile_dest.is_some() {
                         current_depfile_dest
                             .clone()
                             .unwrap_or_else(|| secondary_output_dir.join(&names[i]))

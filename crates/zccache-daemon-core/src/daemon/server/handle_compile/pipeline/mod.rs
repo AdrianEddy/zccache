@@ -798,20 +798,34 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
         ),
     );
 
-    // #1952: a PCH this compile loads must match its recorded inputs.
-    super::pch_gate::repair_loaded_pch_inputs(
+    // Private snapshots provide recorded metadata without rewinding source files.
+    let _pch_overlay = match super::pch_overlay::prepare_loaded_pch_overlay(
         state,
         &sid,
         &ctx.force_includes,
         default_key_root.as_path(),
         client_env.as_deref(),
-    );
+        &effective_args,
+        super::pch_gate::is_pch_output(&output_path),
+    ) {
+        Ok(view) => view,
+        Err(refusal) => {
+            return Response::Error {
+                message: format!("PCH input validation failed; rebuild the PCH: {refusal}"),
+            }
+        }
+    };
+    let mut execution_args = effective_args.clone();
+    if let Some(view) = &_pch_overlay {
+        view.append_args(&mut execution_args);
+    }
 
     // ── Phase: compiler exec ────────────────────────────────────────
     let exec_result = run_compile_exec(CompileExecRequest {
         state_arc,
         compiler: &compiler,
-        effective_args: &effective_args,
+        effective_args: &execution_args,
+        pch_overlay: _pch_overlay.as_ref().map(|view| view.path()),
         cwd,
         cwd_path: &cwd_path,
         source_path: &source_path,
@@ -909,6 +923,23 @@ pub(super) async fn handle_compile_request(req: CompileRequest<'_>) -> Response 
                     ),
                 );
             }
+        }
+    }
+
+    // Bind imported PCH byte identities to the PCH actually produced, before
+    // its companion is collected alongside the ordinary artifact payloads.
+    if exit_code == 0 && super::pch_gate::is_pch_output(&output_path) {
+        let produced = staged_plan.as_ref().map_or(output_path.as_path(), |plan| {
+            plan.primary_staged().as_path()
+        });
+        if let Err(error) = super::pch_provenance::record_pch_imports_for_output(
+            produced,
+            output_path.as_path(),
+            _pch_overlay.as_ref().map(|view| view.path()),
+        ) {
+            return Response::Error {
+                message: format!("failed to record PCH import provenance: {error}"),
+            };
         }
     }
 
