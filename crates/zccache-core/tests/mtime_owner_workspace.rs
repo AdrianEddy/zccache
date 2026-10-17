@@ -18,6 +18,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "#1595 source-mtime replay restores workspace SOURCE files' recorded mtimes, not outputs",
     ),
     (
+        "zccache-fingerprint/src/pch_inputs/mod.rs",
+        "#1952 sets a content-verified PCH input header back to the mtime the PCH recorded; a source, not an output",
+    ),
+    (
         "zccache-cli-core/src/cli/snapshot_fp.rs",
         "bumps existing cargo fingerprint stamp files in place after validating sources; nothing is materialized",
     ),

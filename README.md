@@ -833,6 +833,33 @@ Checked flags include `-I`, `-isystem`, `-iquote`, `-idirafter`, `-include`,
 `-include-pch`, `-imacros`, `-F`, `-iframework`, `-imsvc`, and MSVC `/I`.
 Response-file arguments are checked after expansion by the daemon.
 
+### Precompiled headers under strict validation
+
+zccache serves a cached clang PCH only when every input header the PCH
+recorded (spelling, size, content hash, mtime) matches the workspace, so it
+works with strict PCH flags and timestamps on:
+
+```bash
+# producer
+zccache clang++ -x c++-header -c src/pch.h -o build/pch.h.pch \
+  -Werror=invalid-pch -verify-pch -fpch-validate-input-files-content
+# consumer
+zccache clang++ -c src/a.cpp -include-pch build/pch.h.pch \
+  -Werror=invalid-pch -fpch-validate-input-files-content
+```
+
+A missing input or a size or content change rebuilds the PCH. When a header is
+byte-identical but its mtime moved (a checkout, `git stash`, an editor save),
+zccache sets that header's mtime back to the value the PCH recorded and logs
+it, because clang's `#pragma once` lookup would otherwise parse the header
+twice (`redefinition of ...`). The same repair runs before any compile that
+loads a PCH already on disk, so a header whose mtime moved backwards after a
+cache restore is fixed too. Only headers under the build's checkout root are
+touched, and only with clang >= 19, which records xxh3 content hashes; older
+clang rebuilds instead. Set `ZCCACHE_PCH_MTIME_REPLAY=0` to rebuild the PCH
+instead. Details:
+[artifact-store.md](docs/architecture/artifact-store.md#strict-pch-serving-1952).
+
 ### Compiler child priority
 
 Compiler and linker subprocesses run with `ZCCACHE_COMPILE_PRIORITY=auto` by

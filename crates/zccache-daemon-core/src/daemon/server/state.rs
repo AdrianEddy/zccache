@@ -509,7 +509,9 @@ mod cache_root_writer_tests {
         let first = CacheRootWriterLock::acquire(temp.path()).unwrap();
 
         let second = CacheRootWriterLock::acquire(temp.path());
-        let error = second.err().expect("a second writer must not be granted");
+        let Err(error) = second else {
+            panic!("a second writer must not be granted");
+        };
         assert_eq!(
             error.kind(),
             std::io::ErrorKind::WouldBlock,
