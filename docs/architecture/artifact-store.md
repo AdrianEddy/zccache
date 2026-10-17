@@ -625,8 +625,13 @@ parent PCH's content hash to the imported PCH hashes observed by its producer.
 Every PCH loaded by a chained producer is frozen before compiler execution,
 even if its timestamp already matches. Provenance is captured only from that
 executed immutable view, closing same-size, same-second replacement races.
-It is stored and restored with the parent artifact. Changed imports, corrupt
-companions, and imported timestamp drift without provenance are refused.
+It is stored and restored with the parent artifact. Any private view, including
+a producer's frozen imports, requires bound provenance recursively through the
+imported chain. Matching size and mtime cannot establish a missing baseline:
+repairing another header could make a previously rejected stale chain compile
+with inconsistent values. Legacy consumers needing no private view can still
+run unchanged; legacy chains must be rebuilt before repair. Changed imports
+and corrupt companions are refused.
 No original header or PCH is modified.
 
 The compiler gets `-ivfsoverlay` with `use-external-names: false`, so Clang sees

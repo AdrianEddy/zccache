@@ -77,13 +77,15 @@ fn collect_inputs(
     };
     if let Some(mut records) = records {
         if records.iter().any(|record| record.imported_pch) {
-            let hashes =
-                super::pch_provenance::verified_pch_import_hashes(pch).map_err(|error| {
-                    PchRefusal {
-                        path: pch.to_string_lossy().into_owned(),
-                        reason: PchRefusalReason::Unreadable(error.to_string()),
-                    }
-                })?;
+            let hashes = if freeze {
+                super::pch_provenance::verified_pch_import_hashes(pch)
+            } else {
+                super::pch_provenance::legacy_pch_import_hashes(pch)
+            }
+            .map_err(|error| PchRefusal {
+                path: pch.to_string_lossy().into_owned(),
+                reason: PchRefusalReason::Unreadable(error.to_string()),
+            })?;
             // The writer rechecks this exact verified byte identity before
             // snapshotting, including a same-size replacement during setup.
             for record in records.iter_mut().filter(|record| record.imported_pch) {
@@ -117,9 +119,10 @@ pub(in crate::daemon::server) fn prepare_loaded_pch_overlay(
     let mut inputs = Vec::new();
     let mut visited = std::collections::HashSet::new();
     let mut frozen = Vec::new();
-    for pch in super::pch_gate::loaded_pchs(force_includes) {
+    let loaded_pchs = super::pch_gate::loaded_pchs(force_includes);
+    for pch in &loaded_pchs {
         collect_inputs(
-            &pch,
+            pch,
             &mut visited,
             &mut inputs,
             freeze_loaded_pchs,
@@ -172,6 +175,17 @@ pub(in crate::daemon::server) fn prepare_loaded_pch_overlay(
     }
     if plan.replays.is_empty() {
         return Ok(None);
+    }
+    if !freeze_loaded_pchs {
+        // Any private repair can hide the native failure of an unsigned
+        // import, even when only a header needs a snapshot. Require every
+        // imported parent baseline recursively before exposing such a view.
+        for pch in &loaded_pchs {
+            super::pch_provenance::verified_pch_import_hashes(pch).map_err(|error| PchRefusal {
+                path: pch.to_string_lossy().into_owned(),
+                reason: PchRefusalReason::Unreadable(error.to_string()),
+            })?;
+        }
     }
     // A caller overlay can change which bytes a recorded path names. Do not
     // replace that view using snapshots read from the physical filesystem.

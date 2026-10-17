@@ -223,6 +223,7 @@ fn verify_current(
     provenance: &Provenance,
     visited: &mut std::collections::HashSet<NormalizedPath>,
     verified: &mut HashMap<String, u64>,
+    require_bound: bool,
 ) -> std::io::Result<()> {
     for import in &provenance.imports {
         let path = Path::new(&import.path);
@@ -237,7 +238,7 @@ fn verify_current(
             import.path.clone(),
             crate::fingerprint::pch_inputs::content_xxh3(&bytes),
         );
-        verify_loaded(path, &bytes, visited, verified)?;
+        verify_loaded(path, &bytes, visited, verified, require_bound)?;
     }
     Ok(())
 }
@@ -247,6 +248,7 @@ fn verify_loaded(
     bytes: &[u8],
     visited: &mut std::collections::HashSet<NormalizedPath>,
     verified: &mut HashMap<String, u64>,
+    require_bound: bool,
 ) -> std::io::Result<()> {
     if !visited.insert(NormalizedPath::new(pch)) {
         return Ok(());
@@ -256,10 +258,22 @@ fn verify_loaded(
         return Ok(());
     }
     match std::fs::read(sidecar_path(pch)) {
-        Ok(sidecar) => verify_current(&validate(bytes, &sidecar, &records)?, visited, verified),
+        Ok(sidecar) => verify_current(
+            &validate(bytes, &sidecar, &records)?,
+            visited,
+            verified,
+            require_bound,
+        ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // External PCHs may use clang's native size/mtime validation, but
-            // no private snapshot may hide changed unsigned import metadata.
+            if require_bound {
+                return Err(invalid(format!(
+                    "producer baseline missing for private PCH view: {}",
+                    pch.display()
+                )));
+            }
+            // A legacy PCH may use native checks when no private view is
+            // needed. Matching stats do not establish content provenance:
+            // never turn current imported bytes into an expected hash.
             if !inputs_stat_match(&records) {
                 return Err(invalid(
                     "producer baseline missing for changed imported metadata",
@@ -268,11 +282,7 @@ fn verify_loaded(
             for record in records {
                 let path = Path::new(&record.path);
                 let bytes = std::fs::read(path)?;
-                verified.insert(
-                    record.path.clone(),
-                    crate::fingerprint::pch_inputs::content_xxh3(&bytes),
-                );
-                verify_loaded(path, &bytes, visited, verified)?;
+                verify_loaded(path, &bytes, visited, verified, false)?;
             }
             Ok(())
         }
@@ -289,12 +299,23 @@ pub(super) fn verify_pch_imports(pch: &Path) -> std::io::Result<()> {
 /// Freeze each imported identity from the same bytes that pass provenance
 /// validation. Snapshot creation must recheck these xxh3 values.
 pub(super) fn verified_pch_import_hashes(pch: &Path) -> std::io::Result<HashMap<String, u64>> {
+    import_hashes(pch, true)
+}
+
+/// Preflight a native legacy consumer without authorizing private repair.
+/// Imports lacking bound provenance deliberately receive no expected hash.
+pub(super) fn legacy_pch_import_hashes(pch: &Path) -> std::io::Result<HashMap<String, u64>> {
+    import_hashes(pch, false)
+}
+
+fn import_hashes(pch: &Path, require_bound: bool) -> std::io::Result<HashMap<String, u64>> {
     let mut verified = HashMap::new();
     verify_loaded(
         pch,
         &std::fs::read(pch)?,
         &mut std::collections::HashSet::new(),
         &mut verified,
+        require_bound,
     )?;
     Ok(verified)
 }
@@ -324,6 +345,7 @@ pub(super) fn verify_cached_imports(
         &provenance,
         &mut std::collections::HashSet::new(),
         &mut HashMap::new(),
+        true,
     )
 }
 
@@ -441,6 +463,238 @@ mod tests {
             ],
         );
         Some(directory)
+    }
+
+    fn prepare_view(
+        state: &SharedState,
+        root: &Path,
+        pch: &Path,
+        freeze: bool,
+    ) -> Result<
+        Option<super::super::pch_overlay::PchOverlay>,
+        crate::fingerprint::pch_inputs::PchRefusal,
+    > {
+        let sid = state.sessions.create(crate::depgraph::SessionConfig {
+            client_pid: std::process::id(),
+            working_dir: root.into(),
+            log_file: None,
+            track_stats: true,
+            journal_path: None,
+            profile: false,
+            private_env: Vec::new(),
+            owner_pids: Vec::new(),
+        });
+        super::super::pch_overlay::prepare_loaded_pch_overlay(
+            state,
+            &sid,
+            &[NormalizedPath::new(pch)],
+            root,
+            None,
+            &[],
+            freeze,
+        )
+    }
+
+    fn consumer(
+        root: &Path,
+        pch: &str,
+        name: &str,
+        overlay: Option<&Path>,
+    ) -> std::process::Output {
+        let executable = root.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let mut command = Command::new(clang_compiler().unwrap());
+        command
+            .current_dir(root)
+            .args(["use.cpp", "-include-pch", pch, "-o"])
+            .arg(&executable)
+            .args(["-Werror=invalid-pch", "-fpch-validate-input-files-content"]);
+        if let Some(overlay) = overlay {
+            command.arg("-ivfsoverlay").arg(overlay);
+        }
+        command.output().unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_same_stat_replacement_cannot_gain_private_header_repair() {
+        let Some(directory) = fixture() else { return };
+        let root = directory.path();
+        let cache = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(cache.path());
+        let top = root.join("top.pch");
+        let base = root.join("base.pch");
+        assert!(
+            prepare_view(server.state.as_ref(), root, &top, false)
+                .unwrap()
+                .is_none(),
+            "a bare legacy consumer needs no invented provenance"
+        );
+        let original = std::fs::read(&base).unwrap();
+        let original_time = std::fs::metadata(&base).unwrap().modified().unwrap();
+        std::fs::write(
+            root.join("base.h"),
+            "#pragma once\nconstexpr int value = 2;\nstruct A { int x; };\n",
+        )
+        .unwrap();
+        clang(
+            root,
+            &[
+                "-x",
+                "c++-header",
+                "base.h",
+                "-o",
+                "base.pch",
+                "-verify-pch",
+            ],
+        );
+        assert_eq!(
+            original.len(),
+            std::fs::metadata(&base).unwrap().len() as usize
+        );
+        std::fs::File::options()
+            .write(true)
+            .open(&base)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_time))
+            .unwrap();
+        let header = root.join("base.h");
+        let touched = std::fs::metadata(&header).unwrap().modified().unwrap()
+            + std::time::Duration::from_secs(100);
+        std::fs::File::options()
+            .write(true)
+            .open(&header)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(touched))
+            .unwrap();
+        std::fs::write(
+            root.join("use.cpp"),
+            "#include \"base.h\"\nint main(){return value * 10 + top_value;}\n",
+        )
+        .unwrap();
+        let raw = consumer(root, "top.pch", "raw", None);
+        assert!(
+            !raw.status.success(),
+            "strict clang must reject the unrepaired input"
+        );
+        let view = prepare_view(server.state.as_ref(), root, &top, false);
+        if let Ok(Some(view)) = &view {
+            let unsafe_result = consumer(root, "top.pch", "unsafe", Some(view.path()));
+            assert!(
+                unsafe_result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&unsafe_result.stderr)
+            );
+            assert_eq!(
+                Command::new(root.join(format!("unsafe{}", std::env::consts::EXE_SUFFIX)))
+                    .status()
+                    .unwrap()
+                    .code(),
+                Some(21)
+            );
+        }
+        clang(
+            root,
+            &[
+                "-x",
+                "c++-header",
+                "base.h",
+                "-o",
+                "base.pch",
+                "-verify-pch",
+            ],
+        );
+        clang(
+            root,
+            &[
+                "-x",
+                "c++-header",
+                "top.h",
+                "-include-pch",
+                "base.pch",
+                "-o",
+                "fresh.pch",
+                "-verify-pch",
+            ],
+        );
+        let fresh = consumer(root, "fresh.pch", "fresh", None);
+        assert!(
+            fresh.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fresh.stderr)
+        );
+        assert_eq!(
+            Command::new(root.join(format!("fresh{}", std::env::consts::EXE_SUFFIX)))
+                .status()
+                .unwrap()
+                .code(),
+            Some(22)
+        );
+        assert!(view.is_err(), "missing parent baseline must refuse private repair instead of accepting mixed AST value 21");
+        assert_eq!(
+            std::fs::metadata(header).unwrap().modified().unwrap(),
+            touched
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn producer_freeze_requires_parent_baseline_even_when_all_stats_match() {
+        let Some(directory) = fixture() else { return };
+        let cache = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(cache.path());
+        assert!(
+            prepare_view(
+                server.state.as_ref(),
+                directory.path(),
+                &directory.path().join("top.pch"),
+                true
+            )
+            .is_err(),
+            "freezing a legacy parent cannot bless its current unsigned imports"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn valid_outer_manifest_cannot_hide_missing_nested_parent_baseline() {
+        let Some(directory) = fixture() else { return };
+        let root = directory.path();
+        std::fs::write(
+            root.join("outer.h"),
+            "#pragma once\nconstexpr int outer_value = top_value;\n",
+        )
+        .unwrap();
+        clang(
+            root,
+            &[
+                "-x",
+                "c++-header",
+                "outer.h",
+                "-include-pch",
+                "top.pch",
+                "-o",
+                "outer.pch",
+                "-verify-pch",
+            ],
+        );
+        let outer = root.join("outer.pch");
+        record_pch_imports(&outer, None).unwrap();
+        let primary = CachedPayload::Bytes(Arc::new(std::fs::read(&outer).unwrap()));
+        let manifest = CachedPayload::Bytes(Arc::new(std::fs::read(sidecar_path(&outer)).unwrap()));
+        assert!(
+            verify_cached_imports(&primary, Some(&manifest)).is_err(),
+            "cached outer PCH must require bound nested provenance recursively"
+        );
+        let header = root.join("base.h");
+        let touched = std::fs::metadata(&header).unwrap().modified().unwrap()
+            + std::time::Duration::from_secs(100);
+        std::fs::File::options()
+            .write(true)
+            .open(&header)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(touched))
+            .unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(cache.path());
+        assert!(prepare_view(server.state.as_ref(), root, &outer, false).is_err());
+        assert!(prepare_view(server.state.as_ref(), root, &outer, true).is_err());
     }
 
     #[test]

@@ -857,6 +857,8 @@ shared source file would hide edits from other Ninja build directories.
 Snapshots also cover chained PCHs and implicit `-include header.h` loading.
 Chained producers freeze their imported PCHs before execution and cache a
 content-bound `.zccache-imports.json` companion with the parent PCH.
+Private views require this provenance throughout the imported PCH chain;
+legacy chains without it must be rebuilt before timestamp repair is safe.
 Dependency files and `__FILE__` keep the original paths; private snapshots
 exist only until the compiler exits. Consumers must run through zccache to
 receive this view. clang >= 19 records verifiable xxh3 hashes; older clang

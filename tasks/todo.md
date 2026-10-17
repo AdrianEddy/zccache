@@ -1383,3 +1383,16 @@ The review correction passed 128 artifact tests (one ignored), six writer
 lease tests, one CLI test and focused warnings-denied Clippy in isolation.
 The same primary reviewer confirmed the fix and returned clean. Full repository
 qualification remains required before publication.
+
+# PCH private input views and FastLED integration
+
+- [x] Reproduce shared timestamp replay hiding an edit from an independent Ninja build.
+- [x] Replace shared timestamp writes with verified private snapshots and preserve include aliases.
+- [x] Freeze chained producer imports and bind cached companion provenance to the exact bytes.
+- [x] Validate FastLED through an editable install: 320 native unit targets, 96 examples, focused PCH checks, lint, and a real WASM build.
+- [x] Make real modern-Clang regressions mandatory in the existing isolated integration workflow.
+- [x] Reproduce the remaining legacy chain defect: a same-stat base replacement plus header repair compiles inconsistent values.
+- [x] Refuse private views and producer freezing without recursive bound provenance; retain unchanged legacy consumers. The actual overlay-boundary wrong-code test failed before the fix and all 11 provenance tests pass afterward; primary review is clean.
+- [ ] Review the correction, rerun focused regressions and the full clean-tree local gate.
+- [ ] Merge and publish zccache 1.15.6 through the existing release workflow.
+- [ ] Replace FastLED's editable override with the published package, verify, and merge removal of local timestamp workarounds.
