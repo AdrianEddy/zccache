@@ -110,34 +110,39 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
     let roots = document["roots"]
         .as_array_mut()
         .ok_or_else(|| fail("overlay has no roots array".to_owned()))?;
-    let mut seen: std::collections::HashSet<_> =
-        mappings.iter().map(|(path, _)| path.clone()).collect();
+    let mut seen: std::collections::HashSet<_> = mappings
+        .iter()
+        .map(|(spelling, _)| spelling.clone())
+        .collect();
     for token in crate::depgraph::depfile::depfile_path_tokens(&dependencies) {
-        let path = std::path::PathBuf::from(token);
-        let path = if path.is_absolute() {
-            path
+        let spelling = if Path::new(&token).is_absolute() {
+            token
         } else {
-            cwd.join(path)
+            cwd.join(&token).to_string_lossy().into_owned()
         };
+        // A symlink followed by `..` has filesystem semantics that lexical
+        // normalization changes. Keep compiler spellings intact for identity
+        // checks and VFS names; only private owned outputs are normalized.
+        let path = Path::new(&spelling);
         // Tokens include the synthetic make target, which is not an input.
-        if seen.contains(&path) || !path.is_file() {
+        if seen.contains(&spelling) || !path.is_file() {
             continue;
         }
         for (original, snapshot) in &mappings {
-            if !crate::platform::fs::identity::same_file(&path, original)
-                .map_err(|error| refusal(&path, error))?
+            if !crate::platform::fs::identity::same_file(path, Path::new(original))
+                .map_err(|error| refusal(path, error))?
             {
                 continue;
             }
-            let alias_bytes = std::fs::read(&path).map_err(|error| refusal(&path, error))?;
-            let snapshot_bytes = std::fs::read(snapshot).map_err(|error| refusal(&path, error))?;
+            let alias_bytes = std::fs::read(path).map_err(|error| refusal(path, error))?;
+            let snapshot_bytes = std::fs::read(snapshot).map_err(|error| refusal(path, error))?;
             if alias_bytes != snapshot_bytes {
-                return Err(refusal(&path, "input changed while discovering aliases"));
+                return Err(refusal(path, "input changed while discovering aliases"));
             }
             roots.push(serde_json::json!({
-                "type": "file", "name": path, "external-contents": snapshot,
+                "type": "file", "name": spelling, "external-contents": snapshot,
             }));
-            seen.insert(path);
+            seen.insert(spelling);
             break;
         }
     }
@@ -150,20 +155,21 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
 fn coalesce_roots(
     roots: &mut [serde_json::Value],
     overlay: &Path,
-) -> Result<Vec<(std::path::PathBuf, String)>, PchRefusal> {
-    let mut mappings: Vec<(std::path::PathBuf, String)> = Vec::new();
+) -> Result<Vec<(String, NormalizedPath)>, PchRefusal> {
+    let mut mappings: Vec<(String, NormalizedPath)> = Vec::new();
     for root in roots {
         let original = root["name"]
             .as_str()
             .ok_or_else(|| refusal(overlay, "overlay root has no name"))?;
-        let original = std::path::PathBuf::from(original);
-        let mut snapshot = root["external-contents"]
-            .as_str()
-            .ok_or_else(|| refusal(overlay, "overlay root has no snapshot"))?
-            .to_owned();
+        let original = original.to_owned();
+        let mut snapshot = NormalizedPath::new(
+            root["external-contents"]
+                .as_str()
+                .ok_or_else(|| refusal(overlay, "overlay root has no snapshot"))?,
+        );
         for (previous, shared) in &mappings {
-            if !crate::platform::fs::identity::same_file(&original, previous)
-                .map_err(|error| refusal(&original, error))?
+            if !crate::platform::fs::identity::same_file(Path::new(&original), Path::new(previous))
+                .map_err(|error| refusal(Path::new(&original), error))?
             {
                 continue;
             }
@@ -172,14 +178,15 @@ fn coalesce_roots(
                     == std::fs::metadata(shared)?.modified()?
                     && std::fs::read(&snapshot)? == std::fs::read(shared)?)
             };
-            if !verify().map_err(|error| refusal(&original, error))? {
+            if !verify().map_err(|error| refusal(Path::new(&original), error))? {
                 return Err(refusal(
-                    &original,
+                    Path::new(&original),
                     "loaded PCHs require conflicting file identities",
                 ));
             }
             snapshot.clone_from(shared);
-            root["external-contents"] = serde_json::Value::String(snapshot.clone());
+            root["external-contents"] =
+                serde_json::Value::String(snapshot.to_string_lossy().into_owned());
             break;
         }
         mappings.push((original, snapshot));

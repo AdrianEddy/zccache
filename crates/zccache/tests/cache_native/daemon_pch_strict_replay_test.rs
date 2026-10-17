@@ -11,6 +11,7 @@
 //!
 //! Consumers run through zccache so private VFS snapshots can preserve strict
 //! validation without changing source timestamps. Bare clang is a negative control.
+//! These regressions run in the standard isolated integration suite.
 
 #![allow(
     clippy::unwrap_used,
@@ -341,7 +342,6 @@ fn log_text(checkout: &Checkout) -> String {
 /// Negative control: the cached PCH served as-is after an identical header
 /// was touched breaks the consumer with the redefinition error.
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn touched_header_without_replay_breaks_the_consumer() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -360,7 +360,6 @@ async fn touched_header_without_replay_breaks_the_consumer() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn touched_identical_header_is_served_without_changing_source_mtime() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -395,7 +394,6 @@ async fn touched_identical_header_is_served_without_changing_source_mtime() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn touched_header_with_replay_disabled_is_a_miss() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -440,7 +438,6 @@ async fn touched_header_with_replay_disabled_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn same_size_content_edit_is_a_miss() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -466,7 +463,6 @@ async fn same_size_content_edit_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn size_change_is_a_miss() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -485,7 +481,6 @@ async fn size_change_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn different_include_spelling_is_a_miss() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -502,7 +497,6 @@ async fn different_include_spelling_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn pch_from_another_checkout_is_refused() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -532,7 +526,6 @@ async fn pch_from_another_checkout_is_refused() {
 /// served from the cache; the base lands with a fresh mtime, and serving the
 /// chain must replay the recorded one or clang rejects the chain.
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn chained_pch_is_served_with_base_mtime_replay() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -666,13 +659,11 @@ async fn loaded_pch_is_repaired_before_the_consumer_runs(drifted_secs: i64) {
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn loaded_pch_header_touched_forwards_is_repaired() {
     loaded_pch_is_repaired_before_the_consumer_runs(TOUCHED_SECS).await;
 }
 
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn loaded_pch_header_moved_backwards_is_repaired() {
     loaded_pch_is_repaired_before_the_consumer_runs(RECORDED_SECS - 86_400).await;
 }
@@ -681,7 +672,6 @@ async fn loaded_pch_header_moved_backwards_is_repaired() {
 /// zccache leaves the file alone and clang's strict validation rejects the
 /// PCH. Replay switched off leaves an identical touched header alone too.
 #[tokio::test]
-#[ignore] // integration: spawns clang + watcher sleeps, run with --full
 async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
     let Some(clang) = zccache::test_support::find_clang() else {
         eprintln!("skipping test: clang not found");
@@ -724,7 +714,6 @@ async fn loaded_pch_with_real_edit_or_replay_off_is_not_repaired() {
 /// Ninja build directory whose object was compiled from different bytes.
 #[cfg(unix)]
 #[tokio::test]
-#[ignore] // integration: real clang, Ninja, and daemon
 async fn cached_pch_does_not_hide_reverted_content_from_another_ninja_build() {
     let Some(clang) = zccache::test_support::find_clang() else {
         return;
@@ -813,7 +802,6 @@ async fn cached_pch_does_not_hide_reverted_content_from_another_ninja_build() {
 
 /// Caller VFS overlays need no composition when PCH inputs still match.
 #[tokio::test]
-#[ignore] // integration: real clang and daemon
 async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
     let Some(clang) = zccache::test_support::find_clang() else {
         return;
@@ -852,7 +840,6 @@ async fn caller_overlay_is_accepted_when_no_private_view_is_needed() {
 /// header identity when the private view replaces a drifted PCH input.
 #[cfg(unix)]
 #[tokio::test]
-#[ignore] // integration: real clang and filesystem aliases
 async fn private_pch_view_preserves_header_identity_across_aliases() {
     let Some(clang) = zccache::test_support::find_clang() else {
         return;
@@ -862,8 +849,11 @@ async fn private_pch_view_preserves_header_identity_across_aliases() {
     std::os::unix::fs::symlink("a.h", checkout.root.join("inc/alias.h")).unwrap();
     std::fs::hard_link(checkout.header(), checkout.root.join("inc/hard.h")).unwrap();
     std::os::unix::fs::symlink("inc", checkout.root.join("inc-links")).unwrap();
+    std::fs::create_dir_all(checkout.root.join("other/deep")).unwrap();
+    std::fs::hard_link(checkout.header(), checkout.root.join("other/via-parent.h")).unwrap();
+    std::os::unix::fs::symlink("../other/deep", checkout.root.join("inc/rebound")).unwrap();
     std::fs::write(checkout.root.join("use.cpp"),
-        "#include \"inc/alias.h\"\n#include \"inc/hard.h\"\n#include \"inc-links/a.h\"\nB<> b; int main(){ A a{}; return a.x; }\n").unwrap();
+        "#include \"inc/alias.h\"\n#include \"inc/hard.h\"\n#include \"inc-links/a.h\"\n#include \"inc/rebound/../via-parent.h\"\nB<> b; int main(){ A a{}; return a.x; }\n").unwrap();
     let (ok, error) = checkout.consume(&clang);
     assert!(
         ok,
@@ -894,6 +884,7 @@ async fn private_pch_view_preserves_header_identity_across_aliases() {
     );
     let dependencies = std::fs::read_to_string(checkout.root.join("build/aliases.d")).unwrap();
     assert!(dependencies.contains("alias.h"), "{dependencies}");
+    assert!(dependencies.contains("via-parent.h"), "{dependencies}");
     assert!(!dependencies.contains("input-0"), "{dependencies}");
     daemon.stop().await;
 }

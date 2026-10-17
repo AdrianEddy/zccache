@@ -28,10 +28,10 @@ fn invalid(error: impl std::fmt::Display) -> std::io::Error {
     )
 }
 
-pub(super) fn sidecar_path(pch: &Path) -> std::path::PathBuf {
+pub(super) fn sidecar_path(pch: &Path) -> NormalizedPath {
     let mut path = pch.as_os_str().to_owned();
     path.push(SIDECAR_SUFFIX);
-    path.into()
+    NormalizedPath::new(Path::new(&path))
 }
 
 fn imports(bytes: &[u8]) -> std::io::Result<Vec<PchInput>> {
@@ -48,7 +48,7 @@ fn imports(bytes: &[u8]) -> std::io::Result<Vec<PchInput>> {
 pub(super) fn record_pch_imports(
     pch: &Path,
     overlay_path: Option<&Path>,
-) -> std::io::Result<Option<std::path::PathBuf>> {
+) -> std::io::Result<Option<NormalizedPath>> {
     if overlay_path.is_some() {
         return record_pch_imports_for_output(pch, pch, overlay_path);
     }
@@ -73,7 +73,7 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
     pch: &Path,
     logical_output: &Path,
     overlay_path: Option<&Path>,
-) -> std::io::Result<Option<std::path::PathBuf>> {
+) -> std::io::Result<Option<NormalizedPath>> {
     let bytes = std::fs::read(pch)?;
     let records = imports(&bytes)?;
     if records.is_empty() {
@@ -98,10 +98,7 @@ pub(in crate::daemon::server) fn record_pch_imports_for_output(
             let external = root["external-contents"]
                 .as_str()
                 .ok_or_else(|| invalid("overlay snapshot missing"))?;
-            mappings.insert(
-                NormalizedPath::new(name),
-                std::path::PathBuf::from(external),
-            );
+            mappings.insert(NormalizedPath::new(name), NormalizedPath::new(external));
         }
     }
     let imports = records
@@ -213,7 +210,7 @@ pub(super) fn preserve_import_sidecar(
     let name = logical
         .file_name()
         .ok_or_else(|| invalid("sidecar filename missing"))?;
-    let path = directory.path().join(name);
+    let path = NormalizedPath::new(directory.path()).join(name);
     let mut file = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)

@@ -3,7 +3,8 @@
 use super::{content_xxh3, PchRefusal, PchRefusalReason, PchServePlan};
 use kernal_api::platform::fs::{set_file_mtime, FileTime};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use zccache_core::NormalizedPath;
 
 /// Materialize a private VFS overlay for the drifted inputs in `plan`.
 ///
@@ -18,13 +19,16 @@ use std::path::{Path, PathBuf};
 /// A failure can leave private snapshots for the caller to clean up, but
 /// never writes to an original input, header or PCH. The overlay is published
 /// only after all snapshots have been verified and written.
-pub fn write_pch_overlay(plan: &PchServePlan, directory: &Path) -> Result<PathBuf, PchRefusal> {
+pub fn write_pch_overlay(
+    plan: &PchServePlan,
+    directory: &Path,
+) -> Result<NormalizedPath, PchRefusal> {
     let directory = std::fs::canonicalize(directory).map_err(|error| PchRefusal {
         path: directory.to_string_lossy().into_owned(),
         reason: PchRefusalReason::ReplayFailed(error.to_string()),
     })?;
     // LLVM's VFS uses ordinary Windows absolute names, including UNC names.
-    let directory = zccache_core::path::strip_verbatim_prefix(&directory);
+    let directory = NormalizedPath::new(zccache_core::path::strip_verbatim_prefix(&directory));
     let mut roots = Vec::with_capacity(plan.replays.len());
     for (index, replay) in plan.replays.iter().enumerate() {
         let refusal = |reason| PchRefusal {

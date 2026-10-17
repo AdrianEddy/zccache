@@ -9,7 +9,7 @@ use crate::fingerprint::pch_inputs::{
 /// Owns snapshot files until the compiler that sees them has exited.
 pub(in crate::daemon::server) struct PchOverlay {
     _directory: tempfile::TempDir,
-    path: std::path::PathBuf,
+    path: NormalizedPath,
 }
 
 impl PchOverlay {
@@ -35,12 +35,12 @@ impl PchOverlay {
 /// Includes the transitive base PCHs: a chained PCH omits inherited headers.
 fn collect_inputs(
     pch: &Path,
-    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    visited: &mut std::collections::HashSet<NormalizedPath>,
     inputs: &mut Vec<PchInput>,
     freeze: bool,
     frozen: &mut Vec<PchInput>,
 ) -> Result<(), PchRefusal> {
-    if !visited.insert(pch.to_path_buf()) {
+    if !visited.insert(NormalizedPath::new(pch)) {
         return Ok(());
     }
     let fail = |error: String| PchRefusal {
