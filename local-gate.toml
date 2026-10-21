@@ -55,10 +55,9 @@ tools = ["soldr", "uv"]
 [gate.lanes.py-tests]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "py-tests"]
 tools = ["uv"]
-# `ci/tests` is the suite under test, so it stays an input; the Rust tree and
-# CI plumbing are not read by it. Measured with `ci-lint local-gate lanes
-# --audit py-tests`: 764 tracked files opened, 0 excluded-but-read.
-exclude = ["docs/**", ".github/**", "crates/**"]
+# Current CI contract tests read workflows, crate sources/manifests and docs.
+# The October 21 audit found 438 excluded-but-read paths under the original
+# broad exclusions, so this lane keeps all inputs rather than reuse stale tests.
 
 # Replay MSRV (workspace check plus the nested Dylint test) through Bosn Actions.
 [gate.lanes.check]
