@@ -55,6 +55,9 @@ tools = ["soldr", "uv"]
 [gate.lanes.py-tests]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "py-tests"]
 tools = ["uv"]
+# Current CI contract tests read workflows, crate sources/manifests and docs.
+# The October 21 audit found 438 excluded-but-read paths under the original
+# broad exclusions, so this lane keeps all inputs rather than reuse stale tests.
 
 # Replay MSRV (workspace check plus the nested Dylint test) through Bosn Actions.
 [gate.lanes.check]
@@ -65,6 +68,11 @@ tools = ["bosn"]
 [gate.lanes.docs]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "docs"]
 tools = ["soldr"]
+# `soldr cargo doc` reads crate sources, not CI plumbing or prose. Measured
+# with `ci-lint local-gate lanes --audit docs`: 854 tracked files opened, 0
+# excluded-but-read. Without these the lane re-runs on every CI edit, which is
+# what kept it at 0% reuse.
+exclude = ["docs/**", ".github/**"]
 
 # The Dylint job, replayed in bosn: the longest job on a PR and, until this
 # lane existed, unskippable even for a fully attested head.
