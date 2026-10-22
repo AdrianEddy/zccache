@@ -818,6 +818,7 @@ pub(super) async fn handle_compile_multi(
             builder,
             compiler_priority,
             compiler.to_string_lossy().into_owned(),
+            crate::daemon::process::ProcessLiveness::configured(),
         )
         .await;
     let _resource_admission = compiler_admission.release_compiler_slot();

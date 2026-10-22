@@ -116,6 +116,7 @@ async fn output_within_async(
             crate::daemon::process::CompilePriority::Normal,
             timeout,
             "compiler identity probe".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         ),
     );
     match probe.await {

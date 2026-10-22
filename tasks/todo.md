@@ -1515,8 +1515,25 @@ review is clean. Full isolated normal-wrapper gate rerun remains pending.
 
 ## #1963 implementation plan
 
-- [ ] Capture RED: a live silent generic tool must expire autonomously, release its output operation gate and be reaped.
+- [x] Capture RED: the live silent generic tool bypassed monitoring and exceeded15s; the shared loop now expires, reaps and releases its output gate.
 - [ ] Unify generic linker/exec/hook/passthrough sessions with the compiler progress/CPU owner; require a concrete non-optional liveness policy at process facade entrypoints.
 - [ ] Preserve progressing child behavior, concurrent output drains, finite descendant-pipe grace, typed I/O failures, cancellation and bounded kill/reap ownership.
 - [ ] Extend deny-level resolved-symbol process-owner enforcement and positive/negative fixtures for semantic kernal-api APIs and aliased/UFCS/function-item bypasses.
 - [ ] Update authoritative docs; focused RED -> GREEN, review and full clean-tree gate; merge separate PR then rebase main to origin/main.
+
+#1963 first runtime implementation: all 31 call sites now supply a required
+ProcessLiveness value; stall/runtime/cleanup are finite positive budgets,
+post-exit drain is a Duration (zero explicitly abandons, never selects EOF).
+Configured policy preserves 300s stall/2s drain with a finite 6h total cap for
+progressing/CPU-unobservable children and 5s cleanup. The canonical owner applies
+the total across spawn and run, and confirms kill/reap on runtime expiry.
+Generic and compiler children share CPU/output monitoring and concurrent drains;
+read errors return through bounded cleanup. Initial CPU-progress testing exposed
+an unchanged-output timestamp causing false termination after a short quiet CPU
+sample; CPU advances now refresh the shared progress clock (focused RED -> GREEN).
+Seven isolated focused tests pass, including progress, hard deadline and
+cancellation. All-target daemon compilation and focused Clippy passed before the
+last timestamp correction. Existing process/coalescing regression checks are
+running. Process-owner Dylint, remaining fault/backpressure coverage, authoritative
+docs, review and full gate remain pending. Exec coalescing helpers were split
+without behavior changes so the modified handler stays below 1,000 lines.

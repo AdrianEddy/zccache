@@ -65,7 +65,13 @@ pub(super) async fn run_tool_passthrough(
     builder = apply_client_env_builder(builder, &env, lineage, false);
 
     let priority = CompilePriority::from_client_env(env.as_deref());
-    match super::super::process::async_builder_output_with_priority(builder, priority).await {
+    match super::super::process::async_builder_output_with_priority(
+        builder,
+        priority,
+        crate::daemon::process::ProcessLiveness::configured(),
+    )
+    .await
+    {
         Ok(output) => Response::LinkResult {
             exit_code: output.status.code().unwrap_or(1),
             stdout: Arc::new(output.stdout),
@@ -101,7 +107,10 @@ pub(super) async fn run_archive_tool_passthrough(
     );
     let priority = CompilePriority::from_client_env(env.as_deref());
     match super::super::process::async_builder_output_with_priority_and_post_exit_grace(
-        builder, priority, None,
+        builder,
+        priority,
+        std::time::Duration::from_secs(2),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
     {
@@ -158,7 +167,13 @@ pub(super) async fn run_post_link_deploy_hook(
     );
 
     let priority = CompilePriority::from_client_env(env);
-    match super::super::process::async_builder_output_with_priority(builder, priority).await {
+    match super::super::process::async_builder_output_with_priority(
+        builder,
+        priority,
+        crate::daemon::process::ProcessLiveness::configured(),
+    )
+    .await
+    {
         Ok(out) if out.status.success() => {
             tracing::debug!(program = %program, "post-link deploy hook succeeded");
         }

@@ -94,6 +94,7 @@ pub(in crate::daemon::server) async fn extend_overlay_aliases(
         stdin,
         None,
         format!("{} PCH include alias scan", compiler.display()),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
     .map_err(|error| fail(error.to_string()))?;

@@ -334,6 +334,7 @@ async fn run_discovery_command(
         compiler_priority,
         SYSTEM_INCLUDE_DISCOVERY_TIMEOUT,
         compiler.display().to_string(),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
 }

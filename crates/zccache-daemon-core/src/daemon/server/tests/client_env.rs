@@ -114,6 +114,7 @@ async fn apply_client_env_filters_stale_jobserver_vars_for_compiler_spawns() {
         CompilePriority::Normal,
         std::time::Duration::from_secs(10),
         "client environment fixture".to_string(),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
     .expect("canonical environment fixture must run");

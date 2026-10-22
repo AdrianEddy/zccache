@@ -242,6 +242,7 @@ pub(super) async fn run_compiler_direct_with_family(
             stdin,
             Some(sender),
             compiler.display().to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         );
         let consume = crate::daemon::compile_output::consume(
             receiver,
@@ -258,6 +259,7 @@ pub(super) async fn run_compiler_direct_with_family(
                 stdin,
                 None,
                 compiler.display().to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             )
             .await,
             None,

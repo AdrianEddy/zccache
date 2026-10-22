@@ -264,6 +264,7 @@ pub(super) async fn try_handle_staged_misses(
                     builder,
                     priority,
                     command_description,
+                    crate::daemon::process::ProcessLiveness::configured(),
                 )
                 .await;
             let elapsed_ns = compiler_started.elapsed().as_nanos() as u64;
