@@ -222,7 +222,7 @@ pub(super) struct SharedState {
     /// Serializes every depgraph snapshot for this exact cache root. The guard
     /// is acquired only on blocking threads (or the synchronous drop backstop),
     /// never by an async runtime worker.
-    pub(super) depgraph_persistence: StdMutex<()>,
+    pub(super) depgraph_persistence: Arc<Gate>,
     /// Shared by publishers and exclusively owned by maintenance/Clear from
     /// cache-file mutation through index/live-map mutation.
     pub(super) artifact_publication: Arc<crate::core::sync::Barrier>,
@@ -437,8 +437,7 @@ impl SharedState {
     ) -> T {
         let _guard = self
             .depgraph_persistence
-            .lock_for(crate::core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .blocking_acquire_for(crate::core::sync::OPERATION_TIMEOUT);
         save(&self.dep_graph.load_full())
     }
 

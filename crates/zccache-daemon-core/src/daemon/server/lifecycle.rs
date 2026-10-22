@@ -307,7 +307,7 @@ pub(super) fn new_shared_state(
                 DiskMaintenanceProgress::default(),
             )
             .0,
-            depgraph_persistence: StdMutex::new(()),
+            depgraph_persistence: Arc::new(Gate::new()),
             artifact_publication: Arc::new(crate::core::sync::Barrier::new()),
             staged_materialization_lock: Arc::new(StdMutex::new(std::sync::Weak::new())),
             staged_materialization_init: Arc::new(Gate::new()),

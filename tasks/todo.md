@@ -1429,7 +1429,7 @@ isolated runtime tests used the normal soldr wrapper.
 Use this checkout only. Complete and merge each child PR before starting the
 next child, then sync/rebase against origin/main and leave a clean tree.
 
-- [ ] #1961 bounded state/probe facade migration: finish review, required gate and merge.
+- [x] #1961 bounded state/probe facade migration: merged PR #1972; full six-lane gate passed. Synced/rebased main to origin/main (25d71f09), clean tree before #1962.
 - [ ] #1962 holder watchdog and diagnostics.
 - [ ] #1963 bounded generic process liveness.
 - [ ] #1964 detach staged deletion from publication exclusion.
@@ -1469,3 +1469,20 @@ repeatedly failed before tests on GitHub anonymous latest-release rate limits.
 Pin setup-uv in the existing CI/integration workflows to verified uv 0.12.13
 (the host version), removing the latest-release lookup without skipping tests.
 Rerun the gate for the changed tree before publication.
+
+## #1962 implementation plan
+
+- [x] Capture subprocess RED for wedged State callbacks and native holders, retaining libtest capture and bounded process/output ownership. All three timed out against the previous owners.
+- [x] Add independent RAII waiter/holder registry and watchdog with caller/thread diagnostics; report long waits, terminate overdue short holds. Three real-child regressions now terminate with visible diagnostics.
+- [ ] Integrate State and native guard owners, preserving poison and cancellation; separately budget spawn/materialization holds and exclude long data-free operations.
+- [ ] Verify spawn/materialization subprocess failures, cancelled/dropped registration cleanup, recoverable acquisition, legitimate long operations and writer fairness.
+- [ ] Extend deny-level Dylint/UI enforcement for the private watchdog owner and wrapper guards; update architecture guarantees and limitations.
+- [ ] Run focused RED -> GREEN, review, full clean-tree gate, merge separate PR, then rebase main to origin/main.
+
+#1962 first implementation evidence: eight isolated watchdog tests pass,
+including real blocked async/sync callbacks, a native holder, cancelled waiters,
+poison/drop cleanup, report-only overdue queues and a real operation permit
+held beyond the short-state budget. Core/daemon all-target Clippy with
+`test-support` passes with warnings denied. Depgraph persistence uses a data-free
+operation gate because its scope includes disk I/O. Spawn/materialization
+subprocess coverage, lint fixtures, docs, review and full gate remain pending.

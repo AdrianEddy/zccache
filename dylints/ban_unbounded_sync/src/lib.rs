@@ -313,9 +313,15 @@ fn span_is_in_scope(cx: &LateContext<'_>, span: rustc_span::Span) -> bool {
         return false;
     }
     let in_crate_src = filename.contains("crates/") && filename.contains("/src/");
-    let is_boundary = ["sync.rs", "sync_barrier.rs", "blocking_sync.rs", "wait.rs"]
-        .iter()
-        .any(|name| filename.ends_with(&format!("crates/zccache-core/src/{name}")));
+    let is_boundary = [
+        "sync.rs",
+        "sync_barrier.rs",
+        "sync_watchdog.rs",
+        "blocking_sync.rs",
+        "wait.rs",
+    ]
+    .iter()
+    .any(|name| filename.ends_with(&format!("crates/zccache-core/src/{name}")));
     let is_test_only = filename.contains("/tests/")
         || filename.ends_with("_tests.rs")
         || filename.ends_with("/tests.rs");
