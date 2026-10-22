@@ -1916,3 +1916,17 @@ Remaining enforcement work before #1964 can ship:
   permit (/tmp/zccache-1964-generic-effects-red.log). GREEN: that callback passes
   while a sweep through the same generic FnOnce helper is denied. All 21 UI
   fixtures pass (/tmp/zccache-1964-generic-effects-final.log).
+
+### #1964 bounded pointer revalidation (2026-10-22)
+
+- Replaced unbounded pointer read_to_string calls in maintenance with a private
+  mandatory-budget reader: fixed 129-byte stack buffer, 128-byte accepted maximum,
+  deadline checked between reads, InvalidData for oversized/invalid UTF-8 input.
+  Single kernel calls remain non-interruptible. Short legacy pointer names remain
+  supported; this change does not impose a new digest-format migration.
+- New oversized-pointer regression proved old generation retirement accepted an
+  oversized current pointer (/tmp/zccache-1964-pointer-budget-red.log). Corrected
+  implementation rejects it and preserves the existing generation. Existing
+  legacy cleanup behavior is unchanged.
+- All 96 declared bosn staged-store regressions pass
+  (/tmp/zccache-1964-pointer-budget-compatible-green.log).

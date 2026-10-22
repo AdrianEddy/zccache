@@ -348,3 +348,25 @@ fn eviction_revalidates_a_generation_replaced_while_commit_waits() {
         .unwrap();
     assert_eq!(fs::read(&paths[0]).unwrap(), b"new");
 }
+
+#[test]
+fn generation_retirement_refuses_oversized_pointer_under_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let artifact_dir = directory.path();
+    let key = "a".repeat(64);
+    let generation = "b".repeat(64);
+    let old_generation = super::super::generation_dir(artifact_dir, &key, &generation);
+    fs::create_dir_all(&old_generation).unwrap();
+    fs::write(pointer_path(artifact_dir, &key), vec![b'c'; 4096]).unwrap();
+    let result = detach_generation_if_unreferenced_for(
+        artifact_dir,
+        &key,
+        &generation,
+        Duration::from_secs(1),
+    );
+    assert!(matches!(result, Err(ref error) if error.kind() == io::ErrorKind::InvalidData));
+    assert!(
+        old_generation.exists(),
+        "invalid pointer must not retire a generation"
+    );
+}

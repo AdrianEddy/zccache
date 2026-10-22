@@ -6,9 +6,42 @@ use super::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 use std::time::SystemTime;
+
+// A pointer is control metadata (one digest), never an artifact payload.
+// Bound both allocation and loop work while revalidating under exclusion.
+// The deadline cannot interrupt a single kernel filesystem syscall.
+fn read_generation_pointer_for(path: &Path, bound: std::time::Duration) -> io::Result<String> {
+    let started = std::time::Instant::now();
+    let mut file = fs::File::open(path)?;
+    let mut bytes = [0u8; 129];
+    let mut length = 0;
+    while length < bytes.len() {
+        if started.elapsed() >= bound {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "staged pointer read expired",
+            ));
+        }
+        match file.read(&mut bytes[length..]) {
+            Ok(0) => break,
+            Ok(read) => length += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    if length > 128 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "oversized staged pointer",
+        ));
+    }
+    let value = std::str::from_utf8(&bytes[..length])
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(value.trim().to_owned())
+}
 
 pub(crate) struct StagedDiskArtifact {
     pub(crate) key: String,
@@ -92,7 +125,7 @@ fn scan_staged_disk_artifacts_observed(
             }
             _total_size = _total_size.saturating_add(metadata.len());
             mtime = mtime.max(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
-            fs::read_to_string(&pointer)
+            read_generation_pointer_for(&pointer, crate::core::wait::PROBE)
                 .ok()
                 .map(|value| value.trim().to_string())
         } else {
@@ -209,7 +242,7 @@ pub(crate) fn detach_staged_artifact_keys_if_unchanged(
                     ),
                 ));
             }
-            Ok(_) => fs::read_to_string(&pointer)
+            Ok(_) => read_generation_pointer_for(&pointer, crate::core::wait::PROBE)
                 .ok()
                 .map(|value| value.trim().to_string()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -274,7 +307,7 @@ pub(super) fn detach_generation_if_unreferenced_for(
         return Ok(detached);
     }
     let _guard = StagedCommitGuard::acquire_for(artifact_dir, lock_budget)?;
-    match fs::read_to_string(pointer_path(artifact_dir, key)) {
+    match read_generation_pointer_for(&pointer_path(artifact_dir, key), crate::core::wait::PROBE) {
         Ok(current) if current.trim() == generation => return Ok(detached),
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -334,7 +367,10 @@ pub(crate) fn detach_orphaned_staged_paths_for(
     let mut removed = 0;
     for (path, generation) in candidates {
         if let Some((key, name)) = generation {
-            let current = fs::read_to_string(pointer_path(artifact_dir, &key));
+            let current = read_generation_pointer_for(
+                &pointer_path(artifact_dir, &key),
+                crate::core::wait::PROBE,
+            );
             match current {
                 Ok(current) if current.trim() == name => continue,
                 Ok(_) => {}
