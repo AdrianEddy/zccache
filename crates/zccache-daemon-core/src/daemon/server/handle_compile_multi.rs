@@ -550,6 +550,9 @@ pub(super) async fn handle_compile_multi(
                     .collect()
             };
 
+            // This blocking worker drops displaced records after publication,
+            // including when later bookkeeping unwinds.
+            let mut retired_artifacts = Vec::new();
             let Some(_publication_guard) = begin_artifact_publication_blocking(&state_task) else {
                 return MissOutcome {
                     dep_dirs,
@@ -630,9 +633,12 @@ pub(super) async fn handle_compile_multi(
                 );
                 let cached = CachedArtifact::from_index(meta.clone());
 
-                state_task
-                    .artifacts
-                    .insert(artifact_key_hex.clone(), cached);
+                super::multi_publication::replace_cached_artifact(
+                    &state_task,
+                    artifact_key_hex.clone(),
+                    cached,
+                    &mut retired_artifacts,
+                );
 
                 if allow_fast_hit {
                     let current_clock = state_task.cache_system.current_clock();

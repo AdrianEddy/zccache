@@ -221,6 +221,7 @@ mod link_helpers;
 mod link_process;
 mod loaders;
 mod maintenance_schedule;
+mod multi_publication;
 mod out_dir;
 mod pch;
 mod pending_writes;
