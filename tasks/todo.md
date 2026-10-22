@@ -1869,3 +1869,32 @@ Remaining enforcement work before #1964 can ship:
 - Final OS/features/planted violations, docs, clippy, one clud-review invocation,
   clean committed full gate, PR merge, origin/main rebase and branch cleanup are
   still required. Then continue #1965–1971 in order.
+
+### #1964 structural ownership and cleanup effects (2026-10-22)
+
+- Publication reads now return sealed PublicationReadPermit rather than generic
+  admission ReadPermit. Migrated explicit daemon reader-lease signatures without
+  changing the underlying barrier or lease lifetime.
+- Guard classification follows owned fields/captures, ignores Weak/PhantomData
+  and raw pointer/signature-only parameters, and distinguishes short commit/data
+  guards from reader/native/drain leases. Bulk filesystem work is forbidden under
+  short commits; shared sweeps and unresolved indirect calls are forbidden under
+  either exclusion role. Ordinary admission permits remain separate.
+- Resolved local helper/closure call effects expose cleanup hidden behind a
+  helper. A borrowed guard parameter remains caller-owned even after drop(ref).
+  RED logs: ownership-effects-red and borrowed-guard-red under /tmp/zccache-1964-*.
+- All 18 UI fixtures passed (/tmp/zccache-1964-ownership-boundaries-final.log),
+  including non-owning wrappers, helper-hidden cleanup, reader/drain cleanup,
+  cleanup after release, and borrowed guard retention.
+- Daemon all-target compiler check with test-support passed
+  (/tmp/zccache-1964-publication-reader-feature-check.log). Fixed a preexisting
+  test-only staged_root import exposed by checking the production library.
+- All 95 declared bosn staged-store-regressions passed
+  (/tmp/zccache-1964-publication-reader-runtime.log); the ignored process-exit
+  child is invoked by its parent fixture, not silently omitted.
+- Consumed MIR fallback now rejects relevant effects conservatively instead of
+  rejecting an effect-free body merely because it mentions a guard. This remains
+  conservative, not a final async lifetime solution. Full production lint probe
+  is /tmp/zccache-1964-structural-effects-workspace.log; do not treat UI/runtime
+  receipts as proof of complete production enforcement. Remaining enforcement,
+  OS/features, review/full gate and merge/main cleanup requirements above apply.

@@ -1,6 +1,8 @@
 //! Shared staged-generation ownership for cache-hit materialization.
 
-use super::{is_staged_link_or_reparse, pointer_path, staged_root, StagedReadGuard, STAGED_ROOT};
+#[cfg(test)]
+use super::staged_root;
+use super::{is_staged_link_or_reparse, pointer_path, StagedReadGuard, STAGED_ROOT};
 use std::fs;
 use std::io;
 use std::path::Path;

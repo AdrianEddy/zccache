@@ -1,4 +1,5 @@
 //! Conservative initialized-guard dataflow over the compiler's control-flow graph.
+use super::guard_types::Scope;
 use rustc_hir::def_id::LocalDefId;
 use rustc_lint::LateContext;
 use rustc_middle::{mir, ty};
@@ -8,10 +9,33 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     let (stored, _) = cx.tcx.mir_promoted(owner);
     if stored.is_stolen() {
         let later = cx.tcx.optimized_mir(owner);
-        if later
-            .local_decls
-            .iter()
-            .any(|local| contains_guard(cx, local.ty, &mut Vec::new()))
+        // With consumed MIR, conservatively reject relevant effects anywhere
+        // in the body rather than guessing where an optimized guard dropped.
+        let effects =
+            later
+                .basic_blocks
+                .iter()
+                .fold(0, |effects, block| match &block.terminator().kind {
+                    mir::TerminatorKind::Call { func, .. } => {
+                        effects
+                            | super::effects::call(
+                                cx,
+                                func.ty(&later.local_decls, cx.tcx),
+                                &mut Vec::new(),
+                            )
+                    }
+                    _ => effects,
+                });
+        let scope = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
+            Scope::Any
+        } else {
+            Scope::Critical
+        };
+        if effects != 0
+            && later
+                .local_decls
+                .iter()
+                .any(|local| contains_guard(cx, local.ty, scope, &mut Vec::new()))
         {
             super::emit(
                 cx,
@@ -38,22 +62,38 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     }
     let body = &owned;
     let data = MoveData::gather_moves(body, cx.tcx, |_| true);
-    let mut leaves = Vec::new();
-    for (local, declaration) in body.local_decls.iter_enumerated() {
-        guard_leaves(cx, declaration.ty, mir::Place::from(local), &mut leaves);
-    }
-    let mut guards = Vec::new();
-    for leaf in leaves {
-        let index = match data.rev_lookup.find(leaf.as_ref()) {
-            rustc_mir_dataflow::move_paths::LookupResult::Exact(index)
-            | rustc_mir_dataflow::move_paths::LookupResult::Parent(Some(index)) => index,
-            rustc_mir_dataflow::move_paths::LookupResult::Parent(None) => continue,
-        };
-        if !guards.contains(&index) {
-            guards.push(index);
+    let mut sets = Vec::new();
+    let mut borrowed = Vec::new();
+    for scope in [Scope::Critical, Scope::Any] {
+        // Dropping/moving a reference never releases its caller-owned guard.
+        borrowed.push(body.args_iter().any(|local| {
+            let value = body.local_decls[local].ty;
+            matches!(value.kind(), ty::Ref(..)) && contains_guard(cx, value, scope, &mut Vec::new())
+        }));
+        let mut leaves = Vec::new();
+        for (local, declaration) in body.local_decls.iter_enumerated() {
+            guard_leaves(
+                cx,
+                declaration.ty,
+                mir::Place::from(local),
+                scope,
+                &mut leaves,
+            );
         }
+        let mut guards = Vec::new();
+        for leaf in leaves {
+            let index = match data.rev_lookup.find(leaf.as_ref()) {
+                rustc_mir_dataflow::move_paths::LookupResult::Exact(index)
+                | rustc_mir_dataflow::move_paths::LookupResult::Parent(Some(index)) => index,
+                rustc_mir_dataflow::move_paths::LookupResult::Parent(None) => continue,
+            };
+            if !guards.contains(&index) {
+                guards.push(index);
+            }
+        }
+        sets.push(guards);
     }
-    if guards.is_empty() {
+    if sets[1].is_empty() && !borrowed[1] {
         return;
     }
     let mut cursor = super::guard_initialization::GuardInitialization::new(cx.tcx, body, &data)
@@ -65,30 +105,26 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             continue;
         };
         let callee = func.ty(&body.local_decls, cx.tcx);
-        let ty::FnDef(definition, _) = callee.kind() else {
-            continue;
-        };
-        let path = cx.get_def_path(*definition);
-        let slow = cx.tcx.def_kind(*definition) == rustc_hir::def::DefKind::Fn
-            && matches!(
-                cx.tcx.crate_name(definition.krate).as_str(),
-                "std" | "tokio"
-            )
-            && path.iter().any(|part| part.as_str() == "fs")
-            && path.last().is_some_and(|part| {
-                matches!(
-                    part.as_str(),
-                    "read_dir" | "read" | "write" | "copy" | "remove_dir_all"
-                )
-            });
-        if !slow {
-            continue;
-        }
         cursor.seek_before_primary_effect(mir::Location {
             block,
             statement_index: value.statements.len(),
         });
-        if guards.iter().any(|guard| cursor.get().contains(*guard)) {
+        if !borrowed[1] && !sets[1].iter().any(|guard| cursor.get().contains(*guard)) {
+            continue;
+        }
+        let effects = super::effects::call(cx, callee, &mut Vec::new());
+        let index = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
+            1
+        } else if effects & super::effects::BULK != 0 {
+            0
+        } else {
+            continue;
+        };
+        if borrowed[index]
+            || sets[index]
+                .iter()
+                .any(|guard| cursor.get().contains(*guard))
+        {
             super::emit(
                 cx,
                 terminator.source_info.span,
@@ -101,63 +137,10 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
 fn contains_guard<'tcx>(
     cx: &LateContext<'tcx>,
     value: ty::Ty<'tcx>,
+    scope: Scope,
     seen: &mut Vec<ty::Ty<'tcx>>,
 ) -> bool {
-    if matches!(value.kind(), ty::FnDef(..) | ty::FnPtr(..)) {
-        return false;
-    }
-    if seen.contains(&value) {
-        return false;
-    }
-    seen.push(value);
-    value
-        .walk()
-        .filter_map(|argument| argument.as_type())
-        .any(|nested| {
-            let ty::Adt(adt, arguments) = nested.kind() else {
-                return false;
-            };
-            let path = cx.get_def_path(adt.did());
-            let name = path.last().map(|name| name.as_str());
-            if super::canonical_path(cx, adt.did())
-                == "zccache_daemon_core::daemon::server::staging_root::StagingRoot"
-            {
-                return false;
-            }
-            let native = match cx.tcx.crate_name(adt.did().krate).as_str() {
-                "zccache_core" => name.is_some_and(|name| {
-                    matches!(
-                        name,
-                        "PublicationCommitPermit"
-                            | "MutexGuard"
-                            | "RwLockWriteGuard"
-                            | "RwLockReadGuard"
-                    )
-                }),
-                "zccache_artifact" => {
-                    name == Some("StagedCommitGuard")
-                        && cx.tcx.opt_parent(adt.did()).is_some_and(|parent| {
-                            cx.tcx.item_name(parent).as_str() == "staged_lock"
-                        })
-                }
-                "std" | "kernal_api" | "tokio" | "lock_api" => name.is_some_and(|name| {
-                    matches!(
-                        name,
-                        "FileLock"
-                            | "OwnedFileLock"
-                            | "MutexGuard"
-                            | "RwLockWriteGuard"
-                            | "RwLockReadGuard"
-                    )
-                }),
-                _ => false,
-            };
-            native
-                || (adt.did().is_local()
-                    && adt.all_fields().any(|field| {
-                        contains_guard(cx, field.ty(cx.tcx, arguments).skip_norm_wip(), seen)
-                    }))
-        })
+    super::guard_types::contains(cx, value, scope, seen)
 }
 
 // Query guard leaves rather than initialized wrapper roots. Moving one field
@@ -167,9 +150,10 @@ fn guard_leaves<'tcx>(
     cx: &LateContext<'tcx>,
     value: ty::Ty<'tcx>,
     place: mir::Place<'tcx>,
+    scope: Scope,
     leaves: &mut Vec<mir::Place<'tcx>>,
 ) {
-    if !contains_guard(cx, value, &mut Vec::new()) {
+    if !contains_guard(cx, value, scope, &mut Vec::new()) {
         return;
     }
     if let ty::Tuple(fields) = value.kind() {
@@ -184,6 +168,7 @@ fn guard_leaves<'tcx>(
                     )],
                     cx.tcx,
                 ),
+                scope,
                 leaves,
             );
         }
@@ -191,9 +176,10 @@ fn guard_leaves<'tcx>(
     }
     if let ty::Adt(adt, arguments) = value.kind() {
         let name = cx.tcx.item_name(adt.did());
-        let transparent = adt.did().is_local()
-            || (cx.tcx.crate_name(adt.did().krate).as_str() == "core"
-                && matches!(name.as_str(), "Option" | "Result"));
+        let transparent = super::guard_types::direct(cx, adt.did()).is_none()
+            && (adt.did().is_local()
+                || (cx.tcx.crate_name(adt.did().krate).as_str() == "core"
+                    && matches!(name.as_str(), "Option" | "Result")));
         if transparent {
             for (variant, definition) in adt.variants().iter_enumerated() {
                 let base = if adt.is_enum() {
@@ -207,6 +193,7 @@ fn guard_leaves<'tcx>(
                         cx,
                         field,
                         base.project_deeper(&[mir::ProjectionElem::Field(index, field)], cx.tcx),
+                        scope,
                         leaves,
                     );
                 }

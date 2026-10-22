@@ -11,7 +11,7 @@ use super::*;
 /// index task has stopped.
 pub(super) async fn begin_artifact_publication(
     state: &SharedState,
-) -> Option<crate::core::sync::ReadPermit> {
+) -> Option<crate::core::sync::PublicationReadPermit> {
     if state.shutdown_requested.load(Ordering::Acquire) {
         return None;
     }
@@ -28,7 +28,7 @@ pub(super) async fn begin_artifact_publication(
 /// Blocking-worker counterpart to [`begin_artifact_publication`].
 pub(super) fn begin_artifact_publication_blocking(
     state: &SharedState,
-) -> Option<crate::core::sync::ReadPermit> {
+) -> Option<crate::core::sync::PublicationReadPermit> {
     let guard = state
         .artifact_publication
         .blocking_read_for(crate::core::sync::OPERATION_TIMEOUT);
@@ -276,11 +276,14 @@ pub(super) fn context_env_deps_fresh(
 /// index removal ahead of an already-started hit.
 pub(super) struct CachedArtifactLookup {
     cached: CachedArtifact,
-    _publication_guard: crate::core::sync::ReadPermit,
+    _publication_guard: crate::core::sync::PublicationReadPermit,
 }
 
 impl CachedArtifactLookup {
-    fn new(cached: CachedArtifact, publication_guard: crate::core::sync::ReadPermit) -> Self {
+    fn new(
+        cached: CachedArtifact,
+        publication_guard: crate::core::sync::PublicationReadPermit,
+    ) -> Self {
         Self {
             cached,
             _publication_guard: publication_guard,

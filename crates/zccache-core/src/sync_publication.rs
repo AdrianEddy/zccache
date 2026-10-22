@@ -12,6 +12,12 @@ pub struct PublicationBarrier {
     inner: Barrier,
 }
 
+/// Shared publication/materialization ownership, distinct from admission.
+#[must_use = "retain publication ownership through the publication or hit"]
+pub struct PublicationReadPermit {
+    _permit: ReadPermit,
+}
+
 /// Short blocking publication commit. Release before sweeping detached names.
 #[must_use = "retain publication exclusion through the live-name commit"]
 pub struct PublicationCommitPermit {
@@ -36,19 +42,28 @@ impl PublicationBarrier {
     pub fn read_for(
         &self,
         bound: Duration,
-    ) -> impl std::future::Future<Output = ReadPermit> + use<'_> {
-        self.inner.read_for(bound)
+    ) -> impl std::future::Future<Output = PublicationReadPermit> + use<'_> {
+        let waiting = self.inner.read_for(bound);
+        async move {
+            PublicationReadPermit {
+                _permit: waiting.await,
+            }
+        }
     }
 
     /// Acquire a shared lease on the blocking lane with a mandatory budget.
     #[track_caller]
-    pub fn blocking_read_for(&self, bound: Duration) -> ReadPermit {
-        self.inner.blocking_read_for(bound)
+    pub fn blocking_read_for(&self, bound: Duration) -> PublicationReadPermit {
+        PublicationReadPermit {
+            _permit: self.inner.blocking_read_for(bound),
+        }
     }
 
     /// Try shared ownership without waiting.
-    pub fn try_read_owned(&self) -> Result<ReadPermit, tokio::sync::TryLockError> {
-        self.inner.try_read_owned()
+    pub fn try_read_owned(&self) -> Result<PublicationReadPermit, tokio::sync::TryLockError> {
+        self.inner
+            .try_read_owned()
+            .map(|permit| PublicationReadPermit { _permit: permit })
     }
 
     /// Acquire a short destructive commit on the blocking lane.

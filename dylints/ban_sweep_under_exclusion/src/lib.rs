@@ -5,8 +5,10 @@ extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
+mod effects;
 mod guard_analysis;
 mod guard_initialization;
+mod guard_types;
 extern crate rustc_span;
 
 dylint_linting::declare_late_lint! {

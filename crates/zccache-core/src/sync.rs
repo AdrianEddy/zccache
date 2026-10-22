@@ -6,7 +6,7 @@
 
 pub use super::sync_barrier::{Barrier, ReadPermit, WritePermit};
 pub use super::sync_publication::{
-    PublicationBarrier, PublicationCommitPermit, PublicationDrainPermit,
+    PublicationBarrier, PublicationCommitPermit, PublicationDrainPermit, PublicationReadPermit,
 };
 
 use super::sync_watchdog::Ticket;

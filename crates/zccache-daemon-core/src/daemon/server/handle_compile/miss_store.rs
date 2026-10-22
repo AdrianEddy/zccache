@@ -40,7 +40,7 @@ pub(super) struct MissArtifactStoreRequest<'a> {
     pub(super) exit_code: i32,
     pub(super) compile_start: Instant,
     pub(super) synchronous_persist: bool,
-    pub(super) publication_guard: crate::core::sync::ReadPermit,
+    pub(super) publication_guard: crate::core::sync::PublicationReadPermit,
     pub(super) resource_admission:
         crate::daemon::server::compile_resource_gate::CompileResourcePermit,
 }
@@ -327,7 +327,7 @@ fn store_rustc_outputs(
     t_artifact_build: Instant,
     synchronous_persist: bool,
     staged_persist_plan: Option<StagedCompilePlan>,
-    publication_guard: crate::core::sync::ReadPermit,
+    publication_guard: crate::core::sync::PublicationReadPermit,
     resource_admission: crate::daemon::server::compile_resource_gate::CompileResourcePermit,
     materialization_mode: MaterializationMode,
 ) {
@@ -740,7 +740,7 @@ fn store_single_output(
     stats: &mut MissArtifactStoreStats,
     t_artifact_build: Instant,
     synchronous_persist: bool,
-    publication_guard: crate::core::sync::ReadPermit,
+    publication_guard: crate::core::sync::PublicationReadPermit,
     resource_admission: crate::daemon::server::compile_resource_gate::CompileResourcePermit,
     materialization_mode: MaterializationMode,
 ) {

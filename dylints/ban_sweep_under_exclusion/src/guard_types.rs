@@ -1,0 +1,103 @@
+//! Ownership-sensitive guard roles. Non-owning type parameters are not locks.
+use rustc_lint::LateContext;
+use rustc_middle::ty;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Scope {
+    Critical,
+    Any,
+}
+
+pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId) -> Option<Scope> {
+    let name = cx.tcx.item_name(definition);
+    let krate = cx.tcx.crate_name(definition.krate);
+    match krate.as_str() {
+        "zccache_core" => match name.as_str() {
+            "PublicationCommitPermit" | "MutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard" => {
+                Some(Scope::Critical)
+            }
+            "PublicationReadPermit" | "PublicationDrainPermit" => Some(Scope::Any),
+            _ => None,
+        },
+        "zccache_artifact"
+            if cx
+                .tcx
+                .opt_parent(definition)
+                .is_some_and(|parent| cx.tcx.item_name(parent).as_str() == "staged_lock") =>
+        {
+            match name.as_str() {
+                "StagedCommitGuard" => Some(Scope::Critical),
+                "StagedReadGuard" => Some(Scope::Any),
+                _ => None,
+            }
+        }
+        "std" | "kernal_api" | "tokio" | "lock_api" => match name.as_str() {
+            "MutexGuard" | "MappedMutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard" => {
+                Some(Scope::Critical)
+            }
+            "FileLock" | "OwnedFileLock" => Some(Scope::Any),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(super) fn contains<'tcx>(
+    cx: &LateContext<'tcx>,
+    value: ty::Ty<'tcx>,
+    scope: Scope,
+    seen: &mut Vec<ty::Ty<'tcx>>,
+) -> bool {
+    if seen.contains(&value) {
+        return false;
+    }
+    seen.push(value);
+    match value.kind() {
+        ty::Ref(_, value, _) => contains(cx, *value, scope, seen),
+        ty::Tuple(values) => values.iter().any(|value| contains(cx, value, scope, seen)),
+        ty::Array(value, _) | ty::Slice(value) => contains(cx, *value, scope, seen),
+        ty::Closure(_, arguments) => arguments
+            .as_closure()
+            .upvar_tys()
+            .iter()
+            .any(|value| contains(cx, value, scope, seen)),
+        ty::Coroutine(_, arguments) => arguments
+            .as_coroutine()
+            .upvar_tys()
+            .iter()
+            .any(|value| contains(cx, value, scope, seen)),
+        ty::Adt(definition, arguments) => {
+            if let Some(role) = direct(cx, definition.did()) {
+                return role == Scope::Critical || scope == Scope::Any;
+            }
+            let name = cx.tcx.item_name(definition.did());
+            let krate = cx.tcx.crate_name(definition.did().krate);
+            if matches!(krate.as_str(), "core" | "std" | "alloc")
+                && matches!(name.as_str(), "Weak" | "PhantomData" | "NonNull")
+            {
+                return false;
+            }
+            if scope == Scope::Any
+                && krate.as_str() == "zccache_daemon_core"
+                && name.as_str() == "StagingRoot"
+                && cx
+                    .tcx
+                    .opt_parent(definition.did())
+                    .is_some_and(|parent| cx.tcx.item_name(parent).as_str() == "staging_root")
+            {
+                return false;
+            }
+            if definition.did().is_local() {
+                definition.all_fields().any(|field| {
+                    contains(cx, field.ty(cx.tcx, arguments).skip_norm_wip(), scope, seen)
+                })
+            } else {
+                arguments
+                    .types()
+                    .any(|value| contains(cx, value, scope, seen))
+            }
+        }
+        // Raw pointers and function signatures do not retain their pointees/inputs.
+        _ => false,
+    }
+}

@@ -32,7 +32,7 @@ struct PublishedMiss {
 
 fn insert_staged_multi_cache_visibility(
     state: &SharedState,
-    _publication_guard: &crate::core::sync::ReadPermit,
+    _publication_guard: &crate::core::sync::PublicationReadPermit,
     context_key: ContextKey,
     validation_clock: Clock,
     key: String,
