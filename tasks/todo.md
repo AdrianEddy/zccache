@@ -1955,3 +1955,25 @@ Remaining enforcement work before #1964 can ship:
   (/tmp/zccache-1964-callback-phase-workspace.log). This is not a final green gate;
   bounded fixed-depth detach capability/enforcement and remaining acceptance
   requirements still need completion before review/push/merge.
+
+### #1964 bounded immediate-name detach cursor (2026-10-22)
+
+- Clear now enumerates through private ImmediateChildren with mandatory open_for
+  Duration, private native iterator and deadline checks before/after open and
+  each entry. It never descends into children; its budget includes caller work
+  between entries. Entry errors now propagate instead of being flattened away.
+- Focused RED: a zero-budget Clear previously detached live names
+  (/tmp/zccache-1964-shallow-budget-red.log). GREEN: timeout preserves the live
+  pointer; all 97 staged-store regressions pass
+  (/tmp/zccache-1964-shallow-budget-green.log).
+- Resolved-symbol Dylint confines constructor calls to the two exact Clear
+  detach functions/files, disallows factory capture and aliases outside those
+  owners, and recognizes the actual cursor source/defining crate/type. Its
+  direct one-level read_dir is the sole metadata exception; other effects in
+  its helper graph still propagate. No whole helper/body exemption was added.
+- Wrong-owner/factory RED and GREEN retained under /tmp/zccache-1964-shallow-owner-*
+  using the actual source file. All 22 fixtures pass (shallow-owner-final.log).
+- Full production workspace lib/bin Dylint now passes
+  (/tmp/zccache-1964-shallow-workspace.log). This is default Linux evidence only;
+  pending guard-escape/callback/async coverage, supported OS/features, final docs,
+  clippy, review/full gate, PR merge and main rebase remain required.

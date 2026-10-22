@@ -112,6 +112,14 @@ fn function<'tcx>(
             }
         };
         calls.into_iter().fold(0, |effects, target| {
+            // Only this sealed cursor's direct one-level directory open is
+            // metadata work. Every other effect in its body/helper graph
+            // remains subject to the normal exclusion policy.
+            if super::detach_policy::cursor_open(cx, definition)
+                && super::detach_policy::raw_read_dir(cx, target)
+            {
+                return effects;
+            }
             let target = ty::EarlyBinder::bind(target)
                 .instantiate(cx.tcx, arguments)
                 .skip_norm_wip();

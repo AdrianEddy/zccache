@@ -370,3 +370,26 @@ fn generation_retirement_refuses_oversized_pointer_under_commit() {
         "invalid pointer must not retire a generation"
     );
 }
+
+#[test]
+fn clear_expired_enumeration_budget_keeps_live_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let artifact_dir = directory.path().join("artifacts");
+    fs::create_dir_all(&artifact_dir).unwrap();
+    let source = directory.path().join("source");
+    fs::write(&source, b"retained").unwrap();
+    let key = "e".repeat(64);
+    super::super::persist_staged_artifact_paths(
+        &artifact_dir,
+        &key,
+        &[crate::core::NormalizedPath::from(source)],
+    )
+    .unwrap();
+    let pointer = pointer_path(&artifact_dir, &key);
+    let result = detach_staged_artifacts_for_clear(&artifact_dir, Duration::ZERO);
+    assert!(matches!(result, Err(ref error) if error.kind() == io::ErrorKind::TimedOut));
+    assert!(
+        pointer.exists(),
+        "expired enumeration must not detach live names"
+    );
+}

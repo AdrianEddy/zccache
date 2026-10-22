@@ -11,8 +11,8 @@ pub(in crate::daemon::server) fn detach_clear_artifact_paths_for(
     let root = staged_root(artifact_dir);
     // Also supplies an owned trash root for a legacy-only cache.
     let _guard = StagedReadGuard::acquire_for(artifact_dir, bound)?;
-    for entry in fs::read_dir(artifact_dir)? {
-        let entry = entry?;
+    let mut children = super::immediate_children::ImmediateChildren::open_for(artifact_dir, bound)?;
+    while let Some(entry) = children.next_entry()? {
         let path = entry.path();
         if path == root.as_path() {
             continue;

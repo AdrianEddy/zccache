@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::core::config::MaterializationMode;
 
 mod clear_detach;
+mod immediate_children;
 mod maintenance;
 pub(in crate::daemon::server) use clear_detach::detach_clear_artifact_paths_for;
 mod publish;

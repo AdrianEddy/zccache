@@ -282,7 +282,8 @@ pub(in crate::daemon::server) fn detach_staged_artifacts_for_clear(
     );
     let _store_lock_guard =
         StagedCommitGuard::acquire_for(artifact_dir, lock_budget.min(crate::core::wait::PROBE))?;
-    for entry in fs::read_dir(&root)?.flatten() {
+    let mut children = super::immediate_children::ImmediateChildren::open_for(&root, lock_budget)?;
+    while let Some(entry) = children.next_entry()? {
         if entry.file_name() == STORE_LOCK || entry.file_name() == super::trash::STAGED_TRASH {
             continue;
         }

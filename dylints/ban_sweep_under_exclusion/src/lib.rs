@@ -5,6 +5,7 @@ extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
+mod detach_policy;
 mod effects;
 mod guard_analysis;
 mod guard_initialization;
@@ -72,6 +73,16 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         let direct = matches!(expr.kind, ExprKind::MethodCall(..))
             || matches!(cx.tcx.parent_hir_node(expr.hir_id),
             rustc_hir::Node::Expr(Expr { kind: ExprKind::Call(callee, _), .. }) if callee.hir_id == expr.hir_id);
+        if detach_policy::cursor_open(cx, definition) {
+            if !direct || !detach_policy::approved_caller(cx, &filename) {
+                emit(
+                    cx,
+                    expr.span,
+                    "immediate detach enumeration belongs to the bounded Clear detach owners",
+                );
+            }
+            return;
+        }
         let drain = cx.tcx.crate_name(definition.krate).as_str() == "zccache_core"
             && path
                 .iter()
