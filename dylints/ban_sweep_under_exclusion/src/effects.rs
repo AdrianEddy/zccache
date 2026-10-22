@@ -296,15 +296,52 @@ pub(super) fn drop_value<'tcx>(
             }),
         // An unpolled future already owns its captures. Cancelling it drops
         // those values even though none of its body has executed.
-        ty::Coroutine(_, arguments) => arguments
-            .as_coroutine()
-            .upvar_tys()
-            .iter()
-            .fold(0, |effects, field| {
-                effects | drop_value(cx, field, summaries, active)
-            }),
+        ty::Coroutine(definition, arguments) => {
+            let captures = arguments
+                .as_coroutine()
+                .upvar_tys()
+                .iter()
+                .fold(0, |effects, field| {
+                    effects | drop_value(cx, field, summaries, active)
+                });
+            // Cancellation after suspension also drops initialized saved
+            // locals. Include every possible state: the caller generally
+            // cannot prove which poll state an owned future has reached.
+            if definition.is_local() {
+                let body = cx.tcx.optimized_mir(*definition);
+                let saved = body
+                    .coroutine
+                    .as_ref()
+                    .and_then(|value| value.coroutine_layout.as_ref())
+                    .map_or(0, |layout| {
+                        layout.field_tys.iter().fold(0, |effects, field| {
+                            let value = ty::EarlyBinder::bind(field.ty)
+                                .instantiate(cx.tcx, arguments)
+                                .skip_norm_wip();
+                            effects | drop_value(cx, value, summaries, active)
+                        })
+                    });
+                captures | saved
+            } else {
+                captures | UNKNOWN
+            }
+        }
         ty::Array(field, _) | ty::Slice(field) => drop_value(cx, *field, summaries, active),
-        ty::Dynamic(..) | ty::Param(..) => UNKNOWN,
+        ty::Alias(alias)
+            if matches!(alias.kind, ty::Opaque { .. }) && alias.kind.def_id().is_local() =>
+        {
+            let hidden = cx
+                .tcx
+                .type_of(alias.kind.def_id())
+                .instantiate(cx.tcx, alias.args)
+                .skip_norm_wip();
+            if hidden == value {
+                UNKNOWN
+            } else {
+                drop_value(cx, hidden, summaries, active)
+            }
+        }
+        ty::Dynamic(..) | ty::Param(..) | ty::Alias(..) => UNKNOWN,
         _ => 0,
     };
     active.pop();

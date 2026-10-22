@@ -2166,3 +2166,10 @@ Still required before #1964 can land:
 - Verified RED: `/tmp/zccache-1964-future-drop-red.log` (missing expected diagnostic, exit 101).
 - Effects now include coroutine upvar destructors. GREEN: `/tmp/zccache-1964-future-drop-green.log`, all 36 compiler fixtures pass (7 base + 29 examples).
 - This covers captured values only, not saved locals created after polling; generated cancellation glue/saved-local coverage remains required. Production lint remains unresolved at checked ownership handoffs/opaque drops. No push or PR yet.
+
+### #1964 saved-local cancellation checkpoint
+- Extended `drop_future` with a cleanup constructed inside an async fn and stored across a pending await, plus release-before-drop positive case.
+- RED `/tmp/zccache-1964-saved-drop-red.log`: saved-local drop diagnostic absent.
+- Coroutine drop summaries now inspect saved field types with instantiated generics. Local opaque return types reveal their concrete hidden drop type; unresolved aliases/foreign coroutine cancellation remain UNKNOWN rather than silently cleanup-free.
+- `soldr cargo fmt --manifest-path dylints/ban_sweep_under_exclusion/Cargo.toml --all` passed.
+- Current suite `/tmp/zccache-1964-saved-drop-checkpoint.log`: base 7 pass, example 27 pass / 2 fail. `drop_future` passes both required negative diagnostics and release positives. Drain-authorized and drain-wrong-owner fixtures now flag foreign completed acquisition-future drops. Resolve completed-future lifetime/drop semantics or establish a checked facade contract; do not blanket-ignore foreign cleanup. This is an intermediate RED checkpoint, not a passing gate. Production ownership handoff failures also remain.

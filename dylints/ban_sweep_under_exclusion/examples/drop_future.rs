@@ -20,4 +20,20 @@ fn released(permit: PublicationReadPermit, cleanup: Cleanup) {
     drop(permit);
     drop(callback);
 }
+async fn saved_cleanup(make: fn() -> Cleanup) {
+    let cleanup = make();
+    std::future::pending::<()>().await;
+    drop(cleanup);
+}
+fn held_saved(permit: PublicationReadPermit, make: fn() -> Cleanup) {
+    // May be cancelled before polling or after entering the pending state.
+    let callback = saved_cleanup(make);
+    drop(callback);
+    drop(permit);
+}
+fn released_saved(permit: PublicationReadPermit, make: fn() -> Cleanup) {
+    let callback = saved_cleanup(make);
+    drop(permit);
+    drop(callback);
+}
 fn main() {}
