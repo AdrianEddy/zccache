@@ -85,11 +85,9 @@ pub(super) async fn run_tool_passthrough(
     }
 }
 
-/// Run a parsed pure archiver without the general compiler-child watchdog.
-///
-/// Archivers are leaf processes: they only read declared inputs and write the
-/// requested archive. Waiting on the Tokio child directly avoids watchdog and
-/// blocking-pool setup costs that are material for a 10-20 ms `ar` run.
+/// Run a parsed pure archiver through the canonical finite process owner.
+/// Archive, compiler and generic tool sessions share progress monitoring,
+/// concurrent pipe drains and native child containment.
 pub(super) async fn run_archive_tool_passthrough(
     tool: &Path,
     args: &[String],

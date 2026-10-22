@@ -219,38 +219,53 @@ This is the async-bridge design tracked under meta #889. Its pieces:
 
 ### 1. The one spawn API
 
-`daemon::process::tokio_command_output_with_priority_stdin` (and its
-`_priority` / `_timeout` wrappers) is the single entry point async daemon code
-uses to run a child process — compile (`compile_exec`), link (`handle_link`),
-multi-compile (`handle_compile_multi`), generic exec (`handle_exec`), and the
-system-include probe. It always spawns with piped stdio + `kill_on_drop(true)`.
-Daemon-process death is covered separately on every supported host: Linux uses
-`PR_SET_PDEATHSIG`, macOS uses running-process's transactional kqueue
-supervisor, and Windows retains zccache's process-wide **job object**
-(`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`). Thus the compiler child is reaped both
-when a request future is cancelled and when the daemon process itself dies.
+`daemon::process::async_builder_output_with_priority_stdin` and its capture,
+streaming and probe wrappers require a concrete `ProcessLiveness` policy.
+Compiler, linker, archive, deploy-hook, passthrough and generic exec requests all
+use the same `process_session.rs` owner. It applies spawn admission, priority,
+piped stdio, native containment and `kill_on_drop` to kernal-api sessions.
+Daemon death is covered by Linux parent-death signaling, the macOS transactional
+supervisor and the Windows kill-on-close job object.
 
-### 2. Child-wait watchdog (`daemon::child_watchdog`)
+### 2. Finite process liveness (#1963)
 
-The naive `Child::wait_with_output()` can hang forever. `wait_with_output_watchdog`
-replaces it with a concurrent-drain loop guarding two independent wedge modes —
-**progress-based, never a wall-clock cap on the compile itself** (a large link
-legitimately runs for minutes):
+The shared owner drains both output streams concurrently and observes output,
+identity-bound session CPU and live-tree CPU-tick progress. CPU/output advances refresh the stall
+clock; a quiet child with no CPU progress expires. Configured defaults are:
 
-| Mode | Wedge | Signal | Action |
-|---|---|---|---|
-| **A** (#962) | Child exited, but an orphaned grandchild still holds the stdout/stderr pipe → EOF never arrives | pipe not EOF `POST_EXIT_DRAIN` after exit | abandon drain, return captured output + real status |
-| **B** (#891) | Child never exits and makes no progress | no output **and** no CPU for `STALL_WINDOW` | kill the child, return |
+| Budget | Default | Behavior |
+|---|---|---|
+| Stall | 300 s | Terminate a live child with no CPU/output progress |
+| Total | 6 h | Bound spawn, admission, execution and drain even with ongoing progress |
+| Post-exit drain | 2 s | Abandon descendant-held pipes after direct-child exit |
+| Cleanup | 5 s | Bound kill/reap confirmation after failure or expiry |
+| Streaming send | Stall budget | Fail if a live output consumer stops receiving |
 
-Mode B samples per-process CPU (`GetProcessTimes` on Windows, `/proc/<pid>/stat`
-on Linux, `proc_pid_rusage` on macOS) every `STALL_TICK`; a child that is silent
-but CPU-bound (rustc mid-codegen) or chatty but slow is never touched.
+The six-hour total is a finite backstop for progressing or CPU-unobservable
+children. Callers may construct another finite policy explicitly. Stall, total
+and cleanup must be positive and representable; a zero explicit drain budget
+means immediate bounded abandonment. Legacy zero environment settings select
+finite defaults rather than disabling process liveness.
+
+Read failures and stalled/disconnected consumers return I/O errors through the
+same cleanup owner. A timeout reports whether termination was confirmed or
+cleanup remained unconfirmed. Spawn timeout requests cancellation; it does not
+claim reaping confirmation before a session exists. Cancellation drops the owned
+session and requests native tree cleanup; isolated regressions verify child
+disappearance and operation-permit release.
+
+`ban_raw_subprocess_in_daemon` resolves native and kernal-api process symbols,
+including aliases, UFCS and stored function items. Semantic session operations
+belong in the canonical owner, whose helper signatures require a direct policy
+or Duration. Raw std/Tokio creation is forbidden throughout daemon production
+code. The lint establishes placement and budget signatures; runtime tests prove
+progress and cleanup behavior.
 
 ### 3. Request cancellation (#967)
 
 The IPC dispatch loop races each compile/link/exec handler against **client
 disconnect** (`IpcConnection::wait_for_disconnect`). If the client vanishes, the
-handler future is dropped at its `wait_with_output().await` point; `kill_on_drop`
+handler future is dropped while awaiting the process facade; `kill_on_drop`
 reaps the child and the compile-concurrency permit is released. The embedded
 service does the same via `ZccacheConfig::cancellation` (#923).
 
@@ -258,8 +273,8 @@ service does the same via `ZccacheConfig::cancellation` (#923).
 
 | Path | Bound | Env knob | Issue |
 |---|---|---|---|
-| Post-exit pipe drain (Mode A) | 2 s after exit | `ZCCACHE_POST_EXIT_DRAIN_MS` (`0`=off) | #962 |
-| Alive-hung stall (Mode B) | 300 s no-progress | `ZCCACHE_STALL_WINDOW_MS` (`0`=off) | #891 |
+| Post-exit pipe drain (Mode A) | 2 s after exit | `ZCCACHE_POST_EXIT_DRAIN_MS` (`0`=finite default) | #962 |
+| Alive-hung stall (Mode B) | 300 s no-progress | `ZCCACHE_STALL_WINDOW_MS` (`0`=finite default) | #891 |
 | `<compiler> -vV` identity probe | 30 s | `ZCCACHE_RUSTC_PROBE_TIMEOUT_MS` | #972 |
 | Embedded flush disk-save steps | 30 s each | — | #973 |
 | `zccache exec` coalesce wait | 60 s, then run own copy | `ZCCACHE_EXEC_COALESCE_WAIT_MS` | #971 |

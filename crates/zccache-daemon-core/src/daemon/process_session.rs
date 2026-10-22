@@ -255,8 +255,7 @@ async fn run_owned_session(
     memory_samples.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_progress = std::time::Instant::now();
     let mut last_cpu = session.cpu_time().await.ok().flatten();
-    let mut last_descendant_cpu =
-        crate::platform::process::inspect::descendant_cpu_ticks(session_pid);
+    let mut last_tree_cpu = live_tree_cpu_ticks(session_pid);
     let mut stdout_bytes = 0usize;
     let mut stderr_bytes = 0usize;
     let mut stdout = Vec::new();
@@ -280,6 +279,7 @@ async fn run_owned_session(
                     &mut stderr_bytes,
                     &mut stdout,
                     &mut stderr,
+                    policy.stall_window,
                 )
                 .await
                 {
@@ -374,6 +374,7 @@ async fn run_owned_session(
                         &mut stderr_bytes,
                         &mut stdout,
                         &mut stderr,
+                        policy.stall_window,
                     )
                     .await
                     {
@@ -409,12 +410,11 @@ async fn run_owned_session(
             },
             kernal_api::async_engine::FairRace5::Fourth(()) => {
                 let now_cpu = session.cpu_time().await.ok().flatten();
-                let now_descendant_cpu =
-                    crate::platform::process::inspect::descendant_cpu_ticks(session_pid);
+                let now_tree_cpu = live_tree_cpu_ticks(session_pid);
                 let cpu_advanced =
-                    stall_cpu_advanced(last_cpu, now_cpu, last_descendant_cpu, now_descendant_cpu);
+                    stall_cpu_advanced(last_cpu, now_cpu, last_tree_cpu, now_tree_cpu);
                 last_cpu = now_cpu;
-                last_descendant_cpu = now_descendant_cpu;
+                last_tree_cpu = now_tree_cpu;
                 if cpu_advanced {
                     last_progress = std::time::Instant::now();
                 }
@@ -456,7 +456,13 @@ pub(super) async fn forward_compiler_session_event(
     stderr_bytes: &mut usize,
     stdout: &mut Vec<u8>,
     stderr: &mut Vec<u8>,
+    send_timeout: std::time::Duration,
 ) -> CompilerSessionEvent {
+    // Inject the public kernel fault value only in the isolated fault fixture,
+    // after its real child has published readiness. Exercise the production
+    // event/error/cleanup path without relying on an OS pipe race.
+    #[cfg(test)]
+    let event = super::liveness_tests::inject_ready_pipe_fault(event);
     match event {
         ProcessOutputEvent::Chunk(chunk) => {
             let output = match chunk {
@@ -476,13 +482,20 @@ pub(super) async fn forward_compiler_session_event(
                 }
             };
             match sender {
-                Some(sender) => match sender.send(output).await {
-                    Ok(()) => CompilerSessionEvent::Progress,
-                    Err(_) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "compiler output consumer disconnected",
-                    )),
-                },
+                Some(sender) => {
+                    match kernal_api::async_engine::timeout(send_timeout, sender.send(output)).await
+                    {
+                        Ok(Ok(())) => CompilerSessionEvent::Progress,
+                        Ok(Err(_)) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "compiler output consumer disconnected",
+                        )),
+                        Err(_) => CompilerSessionEvent::ConsumerDisconnected(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "compiler output consumer exceeded the send budget",
+                        )),
+                    }
+                }
                 None => CompilerSessionEvent::Progress,
             }
         }
@@ -645,6 +658,18 @@ async fn emit_compiler_session_diagnostics(
     }
 }
 
+/// Supplement the identity-bound session sample with the existing canonical
+/// kernel tick observation while this owner retains the child session. The
+/// published running-process 4.10.16 Linux Duration conversion quantizes
+/// subsecond CPU progress; raw tick deltas preserve busy-child liveness.
+/// PID reuse can at worst defer a stall decision: termination still uses the
+/// identity-bound session, never this observational PID.
+fn live_tree_cpu_ticks(pid: u32) -> Option<u64> {
+    let direct = crate::platform::process::inspect::cpu_ticks(pid)?;
+    let descendants = crate::platform::process::inspect::descendant_cpu_ticks(pid).unwrap_or(0);
+    Some(direct.saturating_add(descendants))
+}
+
 /// Whether the compiler burned CPU since the last stall sample, counting its
 /// live descendants: a driver that waits on its real compiler is not wedged.
 /// The live descendants' total drops when one exits (cc1plus hands over to
@@ -652,12 +677,12 @@ async fn emit_compiler_session_diagnostics(
 pub(super) fn stall_cpu_advanced(
     previous: Option<std::time::Duration>,
     current: Option<std::time::Duration>,
-    previous_descendants: Option<u64>,
-    current_descendants: Option<u64>,
+    previous_tree: Option<u64>,
+    current_tree: Option<u64>,
 ) -> bool {
     session_cpu_time_advanced(previous, current)
         || matches!(
-            (previous_descendants, current_descendants),
+            (previous_tree, current_tree),
             (Some(previous), Some(current)) if current != previous
         )
 }

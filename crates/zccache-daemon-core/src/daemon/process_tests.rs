@@ -762,6 +762,7 @@ async fn semantic_compiler_consumer_disconnect_remains_a_kill_reap_failure() {
         &mut stderr_bytes,
         &mut stdout,
         &mut stderr,
+        std::time::Duration::from_millis(50),
     )
     .await;
     let CompilerSessionEvent::ConsumerDisconnected(error) = outcome else {

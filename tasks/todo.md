@@ -1516,8 +1516,8 @@ review is clean. Full isolated normal-wrapper gate rerun remains pending.
 ## #1963 implementation plan
 
 - [x] Capture RED: the live silent generic tool bypassed monitoring and exceeded15s; the shared loop now expires, reaps and releases its output gate.
-- [ ] Unify generic linker/exec/hook/passthrough sessions with the compiler progress/CPU owner; require a concrete non-optional liveness policy at process facade entrypoints.
-- [ ] Preserve progressing child behavior, concurrent output drains, finite descendant-pipe grace, typed I/O failures, cancellation and bounded kill/reap ownership.
+- [x] Unify generic linker/exec/hook/passthrough sessions with the compiler progress/CPU owner; require a concrete non-optional liveness policy at process facade entrypoints.
+- [x] Preserve progressing child behavior, concurrent output drains, finite descendant-pipe grace, typed I/O failures, cancellation and bounded kill/reap ownership.
 - [ ] Extend deny-level resolved-symbol process-owner enforcement and positive/negative fixtures for semantic kernal-api APIs and aliased/UFCS/function-item bypasses.
 - [ ] Update authoritative docs; focused RED -> GREEN, review and full clean-tree gate; merge separate PR then rebase main to origin/main.
 
@@ -1537,3 +1537,25 @@ last timestamp correction. Existing process/coalescing regression checks are
 running. Process-owner Dylint, remaining fault/backpressure coverage, authoritative
 docs, review and full gate remain pending. Exec coalescing helpers were split
 without behavior changes so the modified handler stays below 1,000 lines.
+
+#1963 backpressure RED -> GREEN: a live receiver with a full output channel
+previously suspended the process monitor beyond a two-second outer test budget.
+Forwarding now requires an explicit send Duration (the session stall budget),
+returns TimedOut on backpressure, and routes that failure through owned cleanup.
+All 62 isolated process tests and five exec-coalescing tests pass. Semantic
+process-owner Dylint compiles; real-dependency UI validation is in progress.
+
+The broader CPU-progress regression exposed running-process 4.10.16's Linux
+CPU Duration conversion dropping fractional CPU seconds (also present on upstream
+main). Keep native identity-bound session sampling/termination and supplement
+progress with the existing kernal-api raw CPU ticks for the live owned tree.
+This preserves observable subsecond CPU activity without a dependency patch or
+PID-based termination. Captured failures remain in the local regression logs.
+
+#1963 validation: 65 isolated process tests and five coalescing tests pass,
+including live-consumer backpressure, pending-admission timeout cancellation,
+and injected kernel stdout-fault cleanup with a real child and gate. The
+public fault value is injected after child readiness, not claimed as an OS
+pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
+Dylint passed all supported OS selections; final matcher additions covering
+native kernal foreground/sync APIs are included in UI and the full gate.

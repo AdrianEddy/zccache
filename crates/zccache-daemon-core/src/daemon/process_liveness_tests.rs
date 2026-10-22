@@ -47,6 +47,21 @@ fn generic_tool_cancellation_reaps_and_releases_output_gate() {
 }
 
 #[test]
+fn blocked_live_consumer_reaps_and_releases_output_gate() {
+    assert_controller("backpressure-controller");
+}
+
+#[test]
+fn pending_spawn_admission_timeout_leaves_no_late_child() {
+    assert_controller("admission-controller");
+}
+
+#[test]
+fn running_pipe_fault_preserves_error_reaps_and_releases_gate() {
+    assert_controller("pipe-error-controller");
+}
+
+#[test]
 fn process_policy_rejects_disabled_and_unrepresentable_budgets() {
     let second = Duration::from_secs(1);
     for (stall, total, cleanup) in [
@@ -92,6 +107,7 @@ fn generic_tool_liveness_fixture() {
             std::process::id().to_string(),
         )
         .unwrap();
+        println!("zccache-liveness-ready");
         match case.as_str() {
             "silent-child" => loop {
                 std::thread::park();
@@ -115,6 +131,10 @@ fn generic_tool_liveness_fixture() {
         println!("tool-finished");
         return;
     }
+    if case == "admission-controller" {
+        admission_timeout_controller();
+        return;
+    }
     assert!(matches!(
         case.as_str(),
         "controller"
@@ -122,11 +142,13 @@ fn generic_tool_liveness_fixture() {
             | "cpu-controller"
             | "runtime-controller"
             | "cancel-controller"
+            | "backpressure-controller"
+            | "pipe-error-controller"
     ));
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("tool.pid");
     let child_case = match case.as_str() {
-        "output-controller" => "output-child",
+        "output-controller" | "backpressure-controller" => "output-child",
         "cpu-controller" => "cpu-child",
         _ => "silent-child",
     };
@@ -149,18 +171,40 @@ fn generic_tool_liveness_fixture() {
                 Duration::from_secs(2),
             )
             .unwrap(),
-            "output-controller" | "cpu-controller" => ProcessLiveness::new(
-                Duration::from_secs(1),
-                Duration::from_secs(20),
-                Duration::from_millis(100),
-                Duration::from_secs(2),
-            )
-            .unwrap(),
+            "output-controller" | "cpu-controller" | "backpressure-controller" => {
+                ProcessLiveness::new(
+                    Duration::from_secs(1),
+                    Duration::from_secs(20),
+                    Duration::from_millis(100),
+                    Duration::from_secs(2),
+                )
+                .unwrap()
+            }
             _ => ProcessLiveness::configured(),
         };
+        let (sender, receiver) = kernal_api::async_engine::channel(1);
+        sender
+            .send(crate::daemon::compile_output::RawOutputChunk::Stdout(vec![
+                0,
+            ]))
+            .await
+            .unwrap();
+        let backpressured = case == "backpressure-controller";
         let operation = async move {
             let _output_gate = task_gate.acquire_for(Duration::from_secs(1)).await;
-            async_builder_output_with_priority(builder, CompilePriority::Normal, policy).await
+            if backpressured {
+                async_builder_output_streaming_with_priority_decision(
+                    builder,
+                    CompilePriority::Normal,
+                    sender,
+                    "backpressure fixture".into(),
+                    policy,
+                )
+                .await
+                .0
+            } else {
+                async_builder_output_with_priority(builder, CompilePriority::Normal, policy).await
+            }
         };
         let pid = if case == "cancel-controller" {
             let task = tokio::spawn(operation);
@@ -172,12 +216,25 @@ fn generic_tool_liveness_fixture() {
             let result = tokio::time::timeout(Duration::from_secs(15), operation)
                 .await
                 .expect("generic session bypassed its liveness policy");
-            if case == "runtime-controller" {
+            if case == "pipe-error-controller" {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+                assert!(error.to_string().contains("injected live stdout fault"));
+            } else if matches!(
+                case.as_str(),
+                "runtime-controller" | "backpressure-controller"
+            ) {
                 assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
             } else {
                 let output = result.expect("watchdog must return the terminated child's result");
                 if matches!(case.as_str(), "output-controller" | "cpu-controller") {
-                    assert!(output.status.success(), "a progressing tool was killed");
+                    assert!(
+                        output.status.success(),
+                        "a progressing tool was killed: {:?} stdout={} stderr={}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
                     assert!(String::from_utf8_lossy(&output.stdout).contains("tool-finished"));
                 } else {
                     assert!(!output.status.success(), "silent tool was not terminated");
@@ -185,6 +242,7 @@ fn generic_tool_liveness_fixture() {
             }
             wait_for_pid(&pid_file).await
         };
+        drop(receiver);
         assert!(
             gate.try_acquire().is_ok(),
             "completed/cancelled tool retained its output gate"
@@ -198,4 +256,84 @@ fn generic_tool_liveness_fixture() {
             "owned child was not reaped"
         );
     });
+}
+
+// Hold the actual native-spawn admission gate on a separate thread, then let
+// the facade deadline expire while the actor is queued behind that gate.
+fn admission_timeout_controller() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("late-child.pid");
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let holder = std::thread::spawn(move || {
+        let _hold = crate::daemon::spawn_exclusion::materialize_exclusive();
+        zccache_core::wait::send_for(&ready_tx, (), Duration::from_secs(2)).unwrap();
+        zccache_core::wait::recv_for(&release_rx, Duration::from_secs(5)).unwrap();
+    });
+    zccache_core::wait::recv_for(&ready_rx, Duration::from_secs(2)).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let policy = ProcessLiveness::new(
+            Duration::from_secs(2),
+            Duration::from_millis(100),
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let builder = kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
+            .args(["--exact", FIXTURE, "--nocapture"])
+            .env(CASE, "silent-child")
+            .env(PID_FILE, pid_file.as_os_str());
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            async_builder_output_with_priority(builder, CompilePriority::Normal, policy),
+        )
+        .await
+        .expect("admission must honor the process total budget");
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        zccache_core::wait::send_for(&release_tx, (), Duration::from_secs(2)).unwrap();
+        zccache_core::wait::join_for(holder, Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if let Ok(text) = std::fs::read_to_string(&pid_file) {
+            let pid = text.parse().expect("late child must publish a PID");
+            assert!(
+                !crate::platform::process::inspect::is_alive(pid),
+                "cancelled queued spawn left a late child alive"
+            );
+        }
+    });
+}
+
+/// Deterministic kernel-event fault injection; child ownership remains real.
+pub(super) fn inject_ready_pipe_fault(
+    event: kernal_api::ProcessOutputEvent,
+) -> kernal_api::ProcessOutputEvent {
+    use kernal_api::{
+        ProcessOutputChunk, ProcessOutputCompletion, ProcessOutputEvent, ProcessOutputFault,
+    };
+    if std::env::var(CASE).as_deref() == Ok("pipe-error-controller") {
+        if let ProcessOutputEvent::Chunk(ProcessOutputChunk::Stdout(bytes)) = &event {
+            if bytes
+                .windows(b"zccache-liveness-ready".len())
+                .any(|window| window == b"zccache-liveness-ready")
+            {
+                return ProcessOutputEvent::Completion(ProcessOutputCompletion::StdoutError(
+                    ProcessOutputFault::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "injected live stdout fault",
+                        None,
+                    ),
+                ));
+            }
+        }
+    }
+    event
 }

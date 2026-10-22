@@ -24,6 +24,7 @@ async fn compiler_output_has_exactly_one_capture_owner() {
                 &mut stderr_bytes,
                 &mut stdout,
                 &mut stderr,
+                std::time::Duration::from_millis(50),
             )
             .await;
             assert!(matches!(result, CompilerSessionEvent::Progress));
@@ -42,6 +43,40 @@ async fn compiler_output_has_exactly_one_capture_owner() {
             assert!(rx.try_recv().is_err());
         }
     }
+}
+
+#[tokio::test]
+async fn compiler_output_live_consumer_backpressure_expires() {
+    use kernal_api::{ProcessOutputChunk, ProcessOutputEvent};
+    let (sender, _receiver) = kernal_api::async_engine::channel(1);
+    sender
+        .send(crate::daemon::compile_output::RawOutputChunk::Stdout(vec![
+            0,
+        ]))
+        .await
+        .unwrap();
+    let mut stdout_bytes = 0;
+    let mut stderr_bytes = 0;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        forward_compiler_session_event(
+            ProcessOutputEvent::Chunk(ProcessOutputChunk::Stdout(vec![1])),
+            &Some(sender),
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut stdout,
+            &mut stderr,
+            std::time::Duration::from_millis(50),
+        ),
+    )
+    .await
+    .expect("a live blocked consumer must not suspend process monitoring");
+    let CompilerSessionEvent::ConsumerDisconnected(error) = result else {
+        panic!("backpressure must return an actionable process failure");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
 }
 
 #[cfg(unix)]
