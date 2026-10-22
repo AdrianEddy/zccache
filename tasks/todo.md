@@ -1430,7 +1430,7 @@ Use this checkout only. Complete and merge each child PR before starting the
 next child, then sync/rebase against origin/main and leave a clean tree.
 
 - [x] #1961 bounded state/probe facade migration: merged PR #1972; full six-lane gate passed. Synced/rebased main to origin/main (25d71f09), clean tree before #1962.
-- [ ] #1962 holder watchdog and diagnostics.
+- [x] #1962 holder watchdog and diagnostics: merged PR #1973 after all six gate lanes passed (1,394s); rebased clean main to origin/main 0fb36402.
 - [ ] #1963 bounded generic process liveness.
 - [ ] #1964 detach staged deletion from publication exclusion.
 - [ ] #1965 durable-entry payload demotion.
@@ -1512,3 +1512,11 @@ compiler invocation. The harness now gets real-core link inputs from Cargo JSON
 artifacts and runs both examples through the UI source runner, preserving the
 managed nightly toolchain and wrapper. Five local UI fixtures pass; correction
 review is clean. Full isolated normal-wrapper gate rerun remains pending.
+
+## #1963 implementation plan
+
+- [ ] Capture RED: a live silent generic tool must expire autonomously, release its output operation gate and be reaped.
+- [ ] Unify generic linker/exec/hook/passthrough sessions with the compiler progress/CPU owner; require a concrete non-optional liveness policy at process facade entrypoints.
+- [ ] Preserve progressing child behavior, concurrent output drains, finite descendant-pipe grace, typed I/O failures, cancellation and bounded kill/reap ownership.
+- [ ] Extend deny-level resolved-symbol process-owner enforcement and positive/negative fixtures for semantic kernal-api APIs and aliased/UFCS/function-item bypasses.
+- [ ] Update authoritative docs; focused RED -> GREEN, review and full clean-tree gate; merge separate PR then rebase main to origin/main.

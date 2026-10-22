@@ -532,4 +532,8 @@ mod tests;
 #[cfg(test)]
 #[path = "process_session_tests.rs"]
 mod session_tests;
+
+#[cfg(test)]
+#[path = "process_liveness_tests.rs"]
+mod liveness_tests;
 // test inside `cargo test` because the test runner's own stdio
