@@ -17,6 +17,12 @@ includes captured and saved-local destructors; a direct coroutine drop following
 a proven `Poll::Ready` uses a separate completion proof. Custom futures retain
 their destructor effects after `Ready`.
 
+Owned transfers into checked synchronous local helpers use the callee's explicit
+guard parameter types and move paths. Other caller-held guards remain live.
+Generic parameters, borrowed guards, foreign callees, async callees and opaque
+or guard-owning return values do not establish this transfer contract. The
+callee remains subject to guard checks, including destructor and unwind paths.
+
 The core publication facade distinguishes blocking commit permits from complete
 admission operations and async checkpoint/shutdown drains. The workspace gate
 still fails on owned task transfers and opaque drop effects. Cancellation glue

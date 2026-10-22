@@ -193,10 +193,24 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         } else {
             continue;
         };
+        let transferred = super::checked_transfer::moves(
+            cx,
+            body,
+            terminator,
+            if index == 0 {
+                Scope::Critical
+            } else {
+                Scope::Any
+            },
+        );
         if borrowed[index]
-            || sets[index]
-                .iter()
-                .any(|guard| cursor.get().contains(*guard))
+            || sets[index].iter().any(|guard| {
+                let held = data.move_paths[*guard].place;
+                cursor.get().contains(*guard)
+                    && !transferred.iter().any(|moved| {
+                        moved.local == held.local && held.projection.starts_with(moved.projection)
+                    })
+            })
         {
             super::emit(
                 cx,

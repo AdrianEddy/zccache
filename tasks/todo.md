@@ -2195,3 +2195,11 @@ Still required before #1964 can land:
 - Added positive generic forget/erasure of PhantomData<PublicationReadPermit> while a real permit is held; ownership is not inferred from the marker's type argument.
 - Final sequential-after-format validation: `/tmp/zccache-1964-instantiated-escape-verified.log` terminal 0, 7 base + 30 actual-dependency examples pass. Format and git diff checks pass. README now accurately distinguishes current capabilities from remaining #1964 work.
 - These changes do not resolve the existing production RED (latest prior probe 47 diagnostics) or establish complete transfer/cancellation/lane enforcement. No push/PR; continue #1964.
+
+### #1964 explicit checked synchronous ownership transfers
+- RED `/tmp/zccache-1964-typed-transfer-red.log`: caller rejected a local synchronous helper that explicitly takes PublicationReadPermit and releases it before dropping opaque T. Companion fixture preserves a second caller-held permit and requires rejection.
+- Added `checked_transfer.rs`: moves can transfer only to local synchronous functions whose source is covered by the same shared guard-check predicate and whose declared formal type explicitly owns the guard. Generic T, borrowed wrappers, foreign/async callees, and opaque/guard-owning outputs do not qualify. Nested return fields are inspected for unknown ownership.
+- Caller excludes only initialized guard move paths inside those exact moved operands. Other owned and borrowed guards remain held. Callee analysis still checks all paths; added wrong-order helper regression that rejects cleanup before its owned permit is released.
+- `/tmp/zccache-1964-typed-transfer-boundaries.log` terminal 0: 7 base + 32 actual-dependency examples (39 total) pass, including generic escape tests. soldr cargo fmt --check and git diff --check pass.
+- Production `/tmp/zccache-1964-typed-transfer-workspace.log` terminal 1, 44 diagnostics, no ICE (previous snapshot 47). Explicit store_rustc_outputs/store_single_output call diagnostics at miss_store:140/:160 disappear; foreign launch_blocking/captured-state drops and other diagnostics remain. This is not a passing workspace gate, no push/PR.
+- Continue checked task ownership/drop ordering, coroutine cancellation with retained guards, async sweep lane, OS/features, review and full gate before completing #1964 or advancing to #1965.

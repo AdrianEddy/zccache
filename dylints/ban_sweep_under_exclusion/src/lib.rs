@@ -6,6 +6,7 @@ extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
+mod checked_transfer;
 mod cleanup_owners;
 mod completed_future;
 mod detach_policy;
@@ -39,12 +40,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         span: Span,
         owner: rustc_hir::def_id::LocalDefId,
     ) {
-        let file = filename(cx, span);
-        if cx.sess().opts.unstable_opts.ui_testing
-            || (!cx.sess().is_test_crate()
-                && (file.contains("crates/zccache-daemon-core/src/daemon/")
-                    || file.contains("crates/zccache-artifact/src/kv/")))
-        {
+        if checks_guards(cx, span) {
             guard_analysis::check(cx, owner);
         }
     }
@@ -125,6 +121,14 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
             "raw tree deletion belongs to a typed cleanup owner",
         );
     }
+}
+
+fn checks_guards(cx: &LateContext<'_>, span: Span) -> bool {
+    let file = filename(cx, span);
+    cx.sess().opts.unstable_opts.ui_testing
+        || (!cx.sess().is_test_crate()
+            && (file.contains("crates/zccache-daemon-core/src/daemon/")
+                || file.contains("crates/zccache-artifact/src/kv/")))
 }
 
 fn enclosing_function(cx: &LateContext<'_>) -> Option<rustc_hir::def_id::DefId> {
