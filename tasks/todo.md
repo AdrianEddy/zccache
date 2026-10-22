@@ -1504,3 +1504,11 @@ uses the operation queue budget, with unchanged 15s/120s hold limits. Twelve
 final watchdog tests, legitimate-copy regression, all five UI fixtures and
 workspace/all-target Clippy with cli+download-daemon features pass. Correction
 review is clean (one primary reviewer). Full clean-tree gate remains pending.
+
+#1962 first clean-tree gate passed lint, Python, MSRV and docs, then exposed
+Dylint6.0.3's example-runner dependency discovery requiring a bare rustc argv.
+Normal soldr compiler wrapping prevents that parser from identifying the
+compiler invocation. The harness now gets real-core link inputs from Cargo JSON
+artifacts and runs both examples through the UI source runner, preserving the
+managed nightly toolchain and wrapper. Five local UI fixtures pass; correction
+review is clean. Full isolated normal-wrapper gate rerun remains pending.

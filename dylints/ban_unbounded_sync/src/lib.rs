@@ -305,8 +305,8 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
 /// critical-section watchdog must not bound.
 fn span_is_in_scope(cx: &LateContext<'_>, span: rustc_span::Span) -> bool {
     let filename = source_filename(cx, span).replace('\\', "/");
-    // Dependency-bearing UI examples are copied to a temporary directory by
-    // dylint_testing. Compiler UI mode must still exercise every deny rule.
+    // Dependency-bearing UI examples also exercise every deny rule even
+    // though their source paths are outside production crate directories.
     let is_ui_fixture = cx.sess().opts.unstable_opts.ui_testing
         || filename.starts_with("ui/")
         || filename.contains("/ui/");
@@ -448,10 +448,15 @@ fn emit(
 mod ui_test_support {
     include!("../../ui_test_support.rs");
 }
+#[cfg(test)]
+mod ui_dependencies;
 #[test]
 fn ui() {
     ui_test_support::run(env!("CARGO_PKG_NAME"), env!("CARGO_MANIFEST_DIR"));
     let _directory =
         ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
-    dylint_testing::ui_test_examples(env!("CARGO_PKG_NAME"));
+    let flags = ui_dependencies::core_flags();
+    dylint_testing::ui::Test::src_base(env!("CARGO_PKG_NAME"), "examples")
+        .rustc_flags(flags)
+        .run();
 }
