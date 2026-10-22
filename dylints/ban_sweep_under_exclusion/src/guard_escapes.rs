@@ -50,7 +50,14 @@ pub(super) fn leaks<'tcx>(cx: &LateContext<'tcx>, source: ty::Ty<'tcx>) -> bool 
             && path
                 .iter()
                 .any(|part| matches!(part.as_str(), "ManuallyDrop" | "MaybeUninit"))
-            || name == "write" && path.iter().any(|part| part.as_str() == "MaybeUninit"))
+            || name == "write" && path.iter().any(|part| part.as_str() == "MaybeUninit")
+            // These unsafe operations bypass Rust's ordinary move/drop tracking.
+            // Inspect their instantiated element type, not the raw pointer type.
+            || path.iter().any(|part| part.as_str() == "ptr")
+                && matches!(name, "read" | "read_unaligned" | "read_volatile"
+                    | "write" | "write_unaligned" | "write_volatile"
+                    | "copy" | "copy_nonoverlapping")
+            || name == "set_len" && path.iter().any(|part| part.as_str() == "Vec"))
             && arguments.types().any(|value| owns(cx, value))
     } else {
         false
