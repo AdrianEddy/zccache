@@ -11,7 +11,9 @@ use std::path::Path;
 
 use crate::core::config::MaterializationMode;
 
+mod clear_detach;
 mod maintenance;
+pub(in crate::daemon::server) use clear_detach::detach_clear_artifact_paths_for;
 mod publish;
 mod trash;
 #[cfg(test)]
@@ -42,8 +44,7 @@ pub(in crate::daemon::server) use read_guard::{
 pub(in crate::daemon::server) use read_guard::{
     acquire_staged_materialization_guard_for_state,
     acquire_staged_materialization_guard_if_present_for_state, is_staged_artifact_path,
-    is_staged_artifact_root, staged_key_supported, StagedMaterializationGuard,
-    StagedMaterializationLock,
+    staged_key_supported, StagedMaterializationGuard, StagedMaterializationLock,
 };
 #[cfg(test)]
 pub(in crate::daemon::server) use read_guard::{

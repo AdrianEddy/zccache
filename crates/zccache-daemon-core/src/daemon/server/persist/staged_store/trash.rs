@@ -56,6 +56,28 @@ impl DetachedStagedTrash {
         {
             return Err(invalid_path(path));
         }
+        self.rename_into_trash(path)
+    }
+
+    /// Only the Clear detach owner supplies fixed cache-owned parent paths.
+    pub(super) fn detach_cache_child(&mut self, parent: &Path, path: &Path) -> io::Result<()> {
+        let root = staged_root(&self.artifact_dir);
+        if path.parent() != Some(parent)
+            || path == self.artifact_dir
+            || path == root.as_path()
+            || path.starts_with(root.join(STAGED_TRASH))
+            || path == root.join(super::STORE_LOCK).as_path()
+        {
+            return Err(invalid_path(path));
+        }
+        self.rename_into_trash(path)
+    }
+
+    fn rename_into_trash(&mut self, path: &Path) -> io::Result<()> {
+        let root = staged_root(&self.artifact_dir);
+        if !validate_staged_artifact_root(&self.artifact_dir)? {
+            return Ok(());
+        }
         match fs::symlink_metadata(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),

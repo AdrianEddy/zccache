@@ -15,7 +15,8 @@ pub mod staged_lock;
 mod store;
 
 pub use kv::{
-    is_valid_namespace, Key, KvError, KvResult, KvStore, INLINE_THRESHOLD, MAX_VALUE_BYTES,
+    is_valid_namespace, DetachedKvNamespace, Key, KvError, KvResult, KvStore, KvSweepReport,
+    INLINE_THRESHOLD, MAX_VALUE_BYTES,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use layout::fixtures as layout_fixtures;

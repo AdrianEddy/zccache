@@ -16,6 +16,7 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     MaintenanceStoreLockPending,
     MaterializationStoreLockPending,
     TreeSweep,
+    KvNamespaceSweep,
 }
 
 struct ActiveHook {
@@ -40,6 +41,9 @@ pub(in crate::daemon::server) struct StagedHookGuard {
 }
 
 impl StagedHookGuard {
+    pub(in crate::daemon::server) fn pause_kv_sweep(scope: &Path) {
+        pause(scope, StagedHookPoint::KvNamespaceSweep);
+    }
     pub(in crate::daemon::server) fn wait_until_reached_for(&self, timeout: std::time::Duration) {
         crate::core::wait::recv_for(&self.reached, timeout)
             .expect("staged operation did not reach its pause point within the test budget");

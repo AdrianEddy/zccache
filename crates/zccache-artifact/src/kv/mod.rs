@@ -37,6 +37,12 @@ use std::sync::Arc;
 
 use zccache_core::NormalizedPath;
 
+mod retirement;
+pub use retirement::{DetachedKvNamespace, KvSweepReport};
+
+#[cfg(test)]
+mod retirement_tests;
+
 /// Windows long-path (`\\?\`) helpers. On non-Windows platforms every entry
 /// point is a no-op pass-through.
 mod long_path {
@@ -547,34 +553,17 @@ impl KvStore {
             .map_err(|e| KvError::BlockingJoin(e.to_string()))?
     }
 
-    /// Drop every entry under `namespace`. Other namespaces are untouched.
-    ///
-    /// Holds the namespace gate exclusively, so no put from this process is
-    /// mid-write while the directory is removed. A put from another process
-    /// can still drop a file in during the walk, which makes the final
-    /// `rmdir` fail with `DirectoryNotEmpty`; the walk is retried (#1648).
+    /// Detach the namespace under its gate, then sweep its retired generation.
+    /// Concurrent puts after detachment create a fresh namespace.
     pub fn clear_namespace(&self, namespace: &str) -> KvResult<()> {
-        const ATTEMPTS: usize = 8;
-
-        check_namespace(namespace)?;
-        let dir = self.namespace_dir(namespace);
-        let _gate = namespace_gate(dir.as_path())
-            .write_for(zccache_core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let mut attempt = 1;
-        loop {
-            match std::fs::remove_dir_all(dir.as_path()) {
-                Ok(()) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::DirectoryNotEmpty && attempt < ATTEMPTS =>
-                {
-                    attempt += 1;
-                }
-                Err(e) => return Err(KvError::Io(e)),
-            }
+        let detached = self.detach_namespace_for(namespace, zccache_core::sync::STATE_TIMEOUT)?;
+        let report = detached.sweep_for(zccache_core::wait::PROBE)?;
+        if report.failures != 0 || report.deferred {
+            return Err(KvError::Io(std::io::Error::other(
+                "namespace detached; incomplete cleanup retained for recovery",
+            )));
         }
+        Ok(())
     }
 
     /// Async wrapper for [`Self::clear_namespace`] that runs the directory

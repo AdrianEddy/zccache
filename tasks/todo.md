@@ -1627,3 +1627,27 @@ Remaining #1964 work:
 5. Update authoritative docs, final Clippy and cross-OS/feature lint coverage,
    one clud-review invocation, full clean-tree gate, separate PR/merge, then
    switch/rebase main onto origin/main and delete feature branches.
+
+
+### #1964 Clear/KV ownership progress (2026-10-22)
+
+- Added typed `DetachedKvNamespace`: namespace-gated rename, blocking sweep after
+  gate release, durable `.retired` recovery, link/reparse refusal, allocated-byte
+  last-link/COW accounting. Two isolated namespace recreation/reopen tests passed
+  (`/tmp/zccache-1964-kv-green.log`); missing-API RED retained separately.
+- Clear now moves its maintenance permit and retained SharedState into its owned
+  blocking worker. Publication exclusion covers only logical reset, live-name
+  retirement and ordered WAL Clear acknowledgement. Staged, flat, snapshots,
+  meson and exec namespace cleanup follows after writer release. Snapshot live
+  names are never deleted by the later sweeper. WAL flush failure is an error.
+- Both new Clear regressions failed before this change: publication stayed
+  excluded during KV sweeping, and cancellation released maintenance too soon
+  (`/tmp/zccache-1964-clear-cancel-red-bounded.log`). All 87 focused staged,
+  retained-reader, disk-maintenance and Clear tests passed with the owned worker
+  (`/tmp/zccache-1964-clear-owned-green.log`). Strengthened seeded-KV rerun also
+  passed all 87 tests (`/tmp/zccache-1964-clear-seeded-green.log`).
+- Compatibility KV Clear now also retires before sweeping instead of recursively
+  deleting under its namespace gate. Its isolated full KV regression rerun passed 29 tests, with one existing
+  allocation-heavy test ignored (`/tmp/zccache-1964-kv-full-green.log`).
+- The earlier remaining-work item 1 is now implemented, pending final review.
+  Items 2–5 remain open; do not treat this checkpoint as completed #1964.

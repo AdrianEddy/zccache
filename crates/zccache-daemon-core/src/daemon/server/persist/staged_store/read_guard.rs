@@ -99,16 +99,6 @@ pub(in crate::daemon::server) fn is_staged_artifact_path(path: &Path) -> bool {
     root_matches && key_matches && generation_matches && output_matches
 }
 
-pub(in crate::daemon::server) fn is_staged_artifact_root(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| {
-        if crate::platform::host::is_windows() {
-            name.to_string_lossy().eq_ignore_ascii_case(STAGED_ROOT)
-        } else {
-            name == STAGED_ROOT
-        }
-    })
-}
-
 pub(super) fn validate_key(key_hex: &str) -> io::Result<()> {
     if !staged_key_supported(key_hex) {
         return Err(io::Error::new(

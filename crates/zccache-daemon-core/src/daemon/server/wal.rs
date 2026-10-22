@@ -7,7 +7,7 @@ pub(super) enum IndexWriterCommand {
     /// Refresh retention age without replacing newer artifact metadata.
     Touch(String, u64),
     Remove(Vec<String>),
-    Clear(kernal_api::async_engine::OneshotSender<()>),
+    ClearBlocking(std::sync::mpsc::SyncSender<bool>),
     Flush(kernal_api::async_engine::OneshotSender<()>),
 }
 
@@ -361,13 +361,14 @@ async fn process_index_writer_command(
                 }
             }
         }
-        IndexWriterCommand::Clear(ack) => {
+        IndexWriterCommand::ClearBlocking(ack) => {
             wal.clear();
             store.clear();
-            if let Err(error) = Arc::clone(store).flush_async().await {
+            let result = Arc::clone(store).flush_async().await;
+            if let Err(error) = &result {
                 tracing::warn!(%error, "cleared artifact index flush failed");
             }
-            let _ = ack.send(());
+            let _ = ack.try_send(result.is_ok());
         }
         IndexWriterCommand::Flush(ack) => {
             flush_wal_to_disk(store, wal).await;
@@ -390,18 +391,13 @@ pub(super) async fn flush_index_writer(
     )
 }
 
-pub(super) async fn clear_index_writer(
+pub(super) fn clear_index_writer_blocking(
     tx: &kernal_api::async_engine::UnboundedSender<IndexWriterCommand>,
     timeout: std::time::Duration,
 ) -> bool {
-    let (ack_tx, ack_rx) = kernal_api::async_engine::oneshot_channel();
-    if tx.send(IndexWriterCommand::Clear(ack_tx)).is_err() {
-        return false;
-    }
-    matches!(
-        kernal_api::async_engine::timeout(timeout, ack_rx).await,
-        Ok(Ok(()))
-    )
+    let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+    tx.send(IndexWriterCommand::ClearBlocking(ack_tx)).is_ok()
+        && matches!(crate::core::wait::recv_for(&ack_rx, timeout), Ok(true))
 }
 
 pub(super) async fn flush_wal_to_disk(
