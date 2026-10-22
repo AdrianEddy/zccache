@@ -69,7 +69,12 @@ await, return a borrowed guard, or return a future borrowing the state. Runtime
 doctor warnings, watcher registration, include caches, task slots, and download
 status use this boundary. Blocking loaders use `with_blocking_for`.
 
-`sync::Gate` serializes complete operations; `sync::Barrier` supplies shared and
+`sync::Gate` serializes complete operations; its opaque permit retains the
+`Arc<Gate>` identity so weak per-key pools cannot replace a gate in use.
+A separate data-free gate coalesces initial staged-store lease acquisition
+without holding the weak-slot state mutex over filesystem waits.
+
+`sync::Barrier` supplies shared and
 exclusive publication/admission permits. These types contain no caller data.
 Their acquisition APIs require a `Duration`. Single-flight compiler/include
 probes, linker output exclusion, and disk maintenance use gates. Publication and

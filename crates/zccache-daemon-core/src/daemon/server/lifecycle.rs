@@ -302,7 +302,7 @@ pub(super) fn new_shared_state(
             pch_source_map: DashMap::new(),
             journal: CompileJournal::new(crate::core::config::log_dir_from_cache_dir(cache_dir)),
             in_flight_bytes: AtomicUsize::new(0),
-            disk_maintenance: Gate::new(),
+            disk_maintenance: Arc::new(Gate::new()),
             disk_maintenance_progress: tokio::sync::watch::channel(
                 DiskMaintenanceProgress::default(),
             )
@@ -310,6 +310,7 @@ pub(super) fn new_shared_state(
             depgraph_persistence: StdMutex::new(()),
             artifact_publication: Arc::new(crate::core::sync::Barrier::new()),
             staged_materialization_lock: Arc::new(StdMutex::new(std::sync::Weak::new())),
+            staged_materialization_init: Arc::new(Gate::new()),
             persist_semaphore: Arc::new(tokio::sync::Semaphore::new(persist_workers_default())),
             compile_concurrency,
             compile_resource_gate:

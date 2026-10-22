@@ -11,7 +11,7 @@ async fn state_access_finishes_before_the_next_await() {
 
 #[tokio::test]
 async fn cancelled_gate_wait_does_not_keep_its_queue_place() {
-    let gate = Gate::new();
+    let gate = Arc::new(Gate::new());
     let held = gate.acquire_for(STATE_TIMEOUT).await;
     assert!(gate
         .try_acquire_for(Duration::from_millis(1))
@@ -127,5 +127,24 @@ fn blocking_barrier_writer_queues_before_later_readers() {
     assert!(
         queued,
         "blocking writer never queued ahead of later readers"
+    );
+}
+
+#[tokio::test]
+async fn gate_permit_keeps_weak_pool_owner_alive() {
+    let gate = Arc::new(Gate::new());
+    let weak = Arc::downgrade(&gate);
+    let permit = gate.acquire_for(STATE_TIMEOUT).await;
+    drop(gate);
+    let owner = weak.upgrade();
+    drop(permit);
+    assert!(
+        owner.is_some(),
+        "a live permit must retain its weak-pool gate identity"
+    );
+    drop(owner);
+    assert!(
+        weak.upgrade().is_none(),
+        "an idle gate must still be reclaimable"
     );
 }

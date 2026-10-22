@@ -115,9 +115,17 @@ impl<T> State<T> {
 }
 
 /// Serialize whole operations without exposing a protected-data guard.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Gate {
     inner: Arc<tokio::sync::Semaphore>,
+}
+
+/// An operation permit retains the gate's identity in weak per-key pools.
+/// Release capacity before dropping the last gate owner.
+#[derive(Debug)]
+pub struct GatePermit {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    _gate: Arc<Gate>,
 }
 
 impl Default for Gate {
@@ -136,11 +144,14 @@ impl Gate {
 
     /// Acquire one operation permit within a mandatory budget.
     pub async fn try_acquire_for(
-        &self,
+        self: &Arc<Self>,
         bound: Duration,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, LockTimeout> {
+    ) -> Result<GatePermit, LockTimeout> {
         match tokio::time::timeout(bound, Arc::clone(&self.inner).acquire_owned()).await {
-            Ok(Ok(permit)) => Ok(permit),
+            Ok(Ok(permit)) => Ok(GatePermit {
+                _permit: permit,
+                _gate: Arc::clone(self),
+            }),
             _ => Err(LockTimeout(bound)),
         }
     }
@@ -148,15 +159,27 @@ impl Gate {
     /// Acquire an essential operation permit, diagnosing expiry at the caller.
     #[track_caller]
     pub fn acquire_for(
-        &self,
+        self: &Arc<Self>,
         bound: Duration,
-    ) -> impl std::future::Future<Output = tokio::sync::OwnedSemaphorePermit> + use<'_> {
+    ) -> impl std::future::Future<Output = GatePermit> + use<'_> {
         let site = std::panic::Location::caller();
         async move {
             match self.try_acquire_for(bound).await {
                 Ok(permit) => permit,
                 Err(error) => synchronization_failed(site, error),
             }
+        }
+    }
+
+    /// Acquire on a blocking worker, preserving FIFO admission and ownership.
+    #[track_caller]
+    pub fn blocking_acquire_for(self: &Arc<Self>, bound: Duration) -> GatePermit {
+        match super::sync_barrier::blocking_for(Arc::clone(&self.inner).acquire_owned(), bound) {
+            Ok(permit) => GatePermit {
+                _permit: permit,
+                _gate: Arc::clone(self),
+            },
+            Err(_) => synchronization_failed(std::panic::Location::caller(), LockTimeout(bound)),
         }
     }
 }

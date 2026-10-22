@@ -216,7 +216,7 @@ pub(super) struct SharedState {
     pub(super) in_flight_bytes: AtomicUsize,
     /// Serializes background and host-requested disk-maintenance passes for
     /// this exact cache root.
-    pub(super) disk_maintenance: Gate,
+    pub(super) disk_maintenance: Arc<Gate>,
     /// Outcome of every pass the background maintenance loop finishes (#1846).
     pub(super) disk_maintenance_progress: tokio::sync::watch::Sender<DiskMaintenanceProgress>,
     /// Serializes every depgraph snapshot for this exact cache root. The guard
@@ -231,6 +231,8 @@ pub(super) struct SharedState {
     /// cross-process maintenance acquire the exclusive lock.
     pub(super) staged_materialization_lock:
         Arc<StdMutex<std::sync::Weak<StagedMaterializationLock>>>,
+    /// Coalesces initial shared-store acquisition without holding state over I/O.
+    pub(super) staged_materialization_init: Arc<Gate>,
     /// Limits concurrent disk persistence tasks to prevent memory pileup
     /// when disk I/O is slow and compilation requests are fast.
     pub(super) persist_semaphore: Arc<tokio::sync::Semaphore>,

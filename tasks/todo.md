@@ -1455,3 +1455,11 @@ Explicit download-daemon Dylint initially rejected attachment guards and now
 passes with owned job snapshots; membership/client-count ordering is preserved.
 The daemon-only Clippy selection exposed an existing unused client-connect
 warning, so final Clippy validation selects the combined product feature set.
+
+The first full clean-tree gate passed lint, Python, MSRV, docs and cross-OS
+Dylint lanes, but integration exposed two regressions: weak gate ownership
+allowed overlapping link operations, and concurrent staged initialization took
+duplicate OS leases. Opaque permits now retain the outer gate owner; a separate
+data-free initialization gate coalesces staged leases outside the state mutex.
+The weak-owner test failed before the repair; core synchronization tests and
+both unchanged integration assertions pass afterward. Full gate rerun pending.

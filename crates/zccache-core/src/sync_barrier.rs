@@ -108,7 +108,7 @@ impl std::task::Wake for ThreadWake {
 /// The semaphore acquisition future needs no runtime or timer; its waker
 /// unparks this blocking worker, and park_timeout supplies the deadline.
 #[track_caller]
-fn blocking_for<F: std::future::Future>(future: F, bound: Duration) -> F::Output {
+pub(super) fn blocking_for<F: std::future::Future>(future: F, bound: Duration) -> F::Output {
     let started = Instant::now();
     let waker = std::task::Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut context = std::task::Context::from_waker(&waker);

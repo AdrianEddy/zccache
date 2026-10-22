@@ -124,8 +124,8 @@ pub(super) fn validate_key(key_hex: &str) -> io::Result<()> {
 /// The daemon keeps one of these in [`SharedState`] while one or more cache
 /// hits deliver staged outputs. Individual materialization payloads clone the
 /// `Arc`, so active deliveries normally reuse one `.store.lock` owner.
-/// Concurrent first deliveries may briefly acquire duplicate shared candidates
-/// outside the state mutex. Dropping the final payload releases exclusion.
+/// Initial acquisition is coalesced by an operation permit outside the state
+/// mutex. Dropping the final payload releases cross-process exclusion.
 pub(in crate::daemon::server) struct StagedMaterializationLock {
     // Owns the handle: this lock is shared through an `Arc` and outlives the
     // call that took it, so a borrowing guard cannot express it. Under `fs2`
@@ -246,28 +246,37 @@ pub(in crate::daemon::server) fn acquire_staged_materialization_guard_if_present
     }
 }
 
+fn cached_staged_materialization_lock(
+    state: &super::super::SharedState,
+) -> Option<Arc<StagedMaterializationLock>> {
+    state
+        .staged_materialization_lock
+        .lock_for(crate::core::sync::STATE_TIMEOUT)
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .upgrade()
+}
+
 fn acquire_staged_materialization_guard_for_state_from(
     state: &super::super::SharedState,
     artifact_dir: &Path,
     wait_started: Instant,
 ) -> io::Result<StagedMaterializationGuard> {
-    let existing = {
-        let held = state
-            .staged_materialization_lock
-            .lock_for(crate::core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        held.upgrade()
+    let delivery = |store_lock| StagedMaterializationGuard {
+        _store_lock: store_lock,
+        wait_ns: wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        acquired_at: Instant::now(),
     };
-    if let Some(store_lock) = existing {
-        return Ok(StagedMaterializationGuard {
-            _store_lock: store_lock,
-            // Reuse avoids an OS lock syscall, but pointer validation and the
-            // daemon-local mutex are still part of guard-acquisition time.
-            wait_ns: wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-            acquired_at: Instant::now(),
-        });
+    if let Some(existing) = cached_staged_materialization_lock(state) {
+        return Ok(delivery(existing));
     }
-
+    // Only the data-free initialization permit spans the bounded OS wait.
+    // Later initializers recheck the weak slot and reuse the first lease.
+    let _initialization = state
+        .staged_materialization_init
+        .blocking_acquire_for(crate::core::sync::OPERATION_TIMEOUT);
+    if let Some(existing) = cached_staged_materialization_lock(state) {
+        return Ok(delivery(existing));
+    }
     let root = staged_root(artifact_dir);
     #[cfg(test)]
     super::hook::pause(
@@ -280,31 +289,14 @@ fn acquire_staged_materialization_guard_for_state_from(
     )?;
     #[cfg(test)]
     record_test_shared_lock_acquisition(&root);
-    let candidate = Arc::new(StagedMaterializationLock {
+    let store_lock = Arc::new(StagedMaterializationLock {
         _store_lock: store_lock,
     });
-    // The OS wait must not hold the brief state mutex: its 30-second
-    // contention budget exceeds the state acquisition budget. Concurrent
-    // first deliveries may acquire shared candidates; retain one canonical
-    // owner and let the redundant candidate close after releasing the slot.
-    let store_lock = {
-        let mut held = state
-            .staged_materialization_lock
-            .lock_for(crate::core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = held.upgrade() {
-            existing
-        } else {
-            *held = Arc::downgrade(&candidate);
-            Arc::clone(&candidate)
-        }
-    };
-    drop(candidate);
-    Ok(StagedMaterializationGuard {
-        _store_lock: store_lock,
-        wait_ns: wait_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-        acquired_at: Instant::now(),
-    })
+    *state
+        .staged_materialization_lock
+        .lock_for(crate::core::sync::STATE_TIMEOUT)
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::downgrade(&store_lock);
+    Ok(delivery(store_lock))
 }
 
 /// Acquire one payload lease from a daemon-local shared staged-store lock.

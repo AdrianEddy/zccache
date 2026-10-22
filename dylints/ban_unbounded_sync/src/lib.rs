@@ -203,7 +203,12 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
                 ))
                 || matches!(
                     name,
-                    Some("with_blocking_for" | "blocking_read_for" | "blocking_write_for")
+                    Some(
+                        "with_blocking_for"
+                            | "blocking_read_for"
+                            | "blocking_write_for"
+                            | "blocking_acquire_for"
+                    )
                 ));
         if async_body && blocking_facade {
             emit(
