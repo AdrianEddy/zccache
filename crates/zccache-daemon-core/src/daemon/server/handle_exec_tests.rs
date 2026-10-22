@@ -37,6 +37,11 @@ async fn detached_exec_publisher_cannot_resurrect_artifact_after_clear() {
         server.index_writer_rx.take().unwrap(),
         Arc::clone(&server.state.artifact_store),
         Arc::clone(&server.state.index_writer_shutdown),
+        server
+            .state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .unwrap(),
     ));
 
     let permit_count = server.state.persist_semaphore.available_permits() as u32;
@@ -92,6 +97,11 @@ async fn detached_exec_handoff_does_not_reacquire_behind_queued_clear() {
         server.index_writer_rx.take().unwrap(),
         Arc::clone(&server.state.artifact_store),
         Arc::clone(&server.state.index_writer_shutdown),
+        server
+            .state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .unwrap(),
     ));
     let permit_count = server.state.persist_semaphore.available_permits() as u32;
     let blocked_persist = Arc::clone(&server.state.persist_semaphore)

@@ -12,6 +12,11 @@ async fn clear_releases_publication_before_last_provisional_owner_cleanup() {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let private = cache_dir.join("private-plan");
         std::fs::create_dir_all(&private).unwrap();

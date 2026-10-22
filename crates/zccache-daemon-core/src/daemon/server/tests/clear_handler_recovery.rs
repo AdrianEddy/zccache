@@ -21,6 +21,11 @@ async fn retry_retired_namespace(clear: bool) {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let key = crate::artifact::Key::from_hex(&"e".repeat(64)).unwrap();
         server
@@ -92,6 +97,11 @@ async fn cancelled_maintenance_owns_cleanup_after_releasing_publication() {
             server.index_writer_rx.take().unwrap(),
             Arc::clone(&server.state.artifact_store),
             Arc::clone(&server.state.index_writer_shutdown),
+            server
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .unwrap(),
         ));
         let source = directory.path().join("old-source");
         std::fs::write(&source, b"old").unwrap();
@@ -133,6 +143,12 @@ async fn cancelled_maintenance_owns_cleanup_after_releasing_publication() {
                 .is_cancelled()
         );
         let cleanup_is_owned = server.state.disk_maintenance.try_acquire().is_err();
+        // Finish the WAL actor so only the cleanup worker can retain this claim.
+        server.state.index_writer_shutdown.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), index_writer)
+            .await
+            .unwrap()
+            .unwrap();
         server.state.cache_root_lock.release();
         let root = cache_dir.as_path().to_path_buf();
         let root_is_owned = tokio::task::spawn_blocking(move || {
@@ -156,11 +172,6 @@ async fn cancelled_maintenance_owns_cleanup_after_releasing_publication() {
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        server.state.index_writer_shutdown.notify_one();
-        tokio::time::timeout(std::time::Duration::from_secs(5), index_writer)
-            .await
-            .unwrap()
-            .unwrap();
         assert!(
             old_is_unreachable,
             "evicted entry remained reachable during cleanup"

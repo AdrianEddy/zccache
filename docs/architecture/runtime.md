@@ -174,9 +174,14 @@ Clear and disk-maintenance sweep workers also retain their own root lease,
 independent of the request future and `Arc<SharedState>`. Explicit daemon release
 cannot admit another native writer while these workers are paused in cleanup.
 Maintenance separately retains a completion lease through its full-pass marker.
-These worker leases do not establish ownership for a WAL command whose disk write
-continues after its acknowledgement waiter is cancelled or times out; that write
-must retain its own root ownership through actual completion.
+The WAL actor receives a service root lease before it is spawned. All of its
+index writes (periodic/batch flush, removal, Clear and final drain) use a private
+nonblocking job constructor requiring shared root ownership. Each blocking job
+retains its own strong reference through store teardown. An acknowledgement timeout
+or actor cancellation releases the waiter while the actual write retains native
+exclusion. A paused-write regression exercises both conditions and proves native
+root reuse after completion. The actor is an owned service with an explicit
+shutdown signal and bounded drain/join; its FIFO writes remain sequential.
 
 ### Soldr fixes audited (2026-09-01 through 2026-10-21)
 

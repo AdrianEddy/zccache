@@ -143,7 +143,12 @@ impl EmbeddedDaemon {
         if let Some(rx) = self.index_writer_rx.take() {
             let store = Arc::clone(&self.state.artifact_store);
             let shutdown = Arc::clone(&self.state.index_writer_shutdown);
-            let task = run_index_writer(rx, store, shutdown);
+            let root = self
+                .state
+                .cache_root_lock
+                .lease_for(STATE_TIMEOUT)
+                .expect("index writer startup requires an owned cache root");
+            let task = run_index_writer(rx, store, shutdown, root);
             // zccache#922: when the embedded host supplied a canonical handle,
             // route the persistent index-writer spawn through it. Otherwise
             // fall back to the ambient runtime (the calling runtime is the

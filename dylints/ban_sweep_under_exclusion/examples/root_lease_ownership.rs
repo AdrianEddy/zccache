@@ -26,3 +26,12 @@ fn generic_erased(lease: CacheRootWriterLease) {
     let _erased = erase_value(lease);
 }
 fn main() {}
+fn shared(lease: std::sync::Arc<CacheRootWriterLease>) {
+    std::mem::forget(lease);
+}
+fn shared_generic(lease: std::sync::Arc<CacheRootWriterLease>) {
+    forget_value(lease);
+}
+fn shared_erased(lease: std::sync::Arc<CacheRootWriterLease>) {
+    let _erased: Box<dyn std::any::Any> = Box::new(lease);
+}
