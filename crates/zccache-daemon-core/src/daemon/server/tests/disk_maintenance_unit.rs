@@ -8,6 +8,8 @@ use super::*;
 // as a `#[path]`-loaded `mod tests`, not as a `tests/mod.rs`.
 #[path = "disk_maintenance_retired_stores.rs"]
 mod retired_stores;
+#[path = "disk_maintenance_trash.rs"]
+mod trash;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 

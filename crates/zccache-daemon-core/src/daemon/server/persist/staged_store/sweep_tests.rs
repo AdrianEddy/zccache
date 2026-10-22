@@ -245,3 +245,59 @@ fn publication_while_sweeping(clear: bool) {
         "Clear swept a new publication"
     );
 }
+
+#[test]
+fn process_exit_after_retirement_is_recovered_without_erasing_a_replacement() {
+    use super::super::{
+        load_staged_artifact_paths, persist_staged_artifact_paths, sweep_staged_trash_for,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let artifact_dir = directory.path().join("artifacts");
+    fs::create_dir_all(&artifact_dir).unwrap();
+    let output = crate::core::wait::output_for(
+        kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
+            .args(["--exact", "daemon::server::persist::staged_store::maintenance::sweep_tests::retirement_exit_child", "--ignored", "--nocapture"])
+            .env("ZCCACHE_RETIREMENT_EXIT_CHILD", artifact_dir.as_os_str()),
+        Duration::from_secs(10),
+    ).unwrap();
+    assert_eq!(
+        output.exit.raw_code(),
+        86,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let key = "f".repeat(64);
+    assert!(!pointer_path(&artifact_dir, &key).exists());
+    assert!(fs::read_dir(staged_root(&artifact_dir).join(".trash"))
+        .unwrap()
+        .next()
+        .is_some());
+    let replacement = directory.path().join("replacement");
+    fs::write(&replacement, b"fresh replacement").unwrap();
+    persist_staged_artifact_paths(&artifact_dir, &key, &[replacement.into()]).unwrap();
+    let report = sweep_staged_trash_for(&artifact_dir, Duration::from_secs(5)).unwrap();
+    assert_eq!(report.failures, 0);
+    assert!(!report.deferred);
+    let paths = load_staged_artifact_paths(&artifact_dir, &key, &[17])
+        .unwrap()
+        .unwrap();
+    assert_eq!(fs::read(&paths[0]).unwrap(), b"fresh replacement");
+    assert!(!staged_root(&artifact_dir).join(".trash").exists());
+}
+
+#[test]
+#[ignore = "bounded subprocess fixture, invoked by process_exit_after_retirement test"]
+fn retirement_exit_child() {
+    use super::super::{detach_staged_artifacts_for_clear, persist_staged_artifact_paths};
+    let Some(root) = std::env::var_os("ZCCACHE_RETIREMENT_EXIT_CHILD") else {
+        return;
+    };
+    let artifact_dir = Path::new(&root);
+    let source = artifact_dir.parent().unwrap().join("crashed-source");
+    fs::write(&source, b"unreachable predecessor").unwrap();
+    persist_staged_artifact_paths(artifact_dir, &"f".repeat(64), &[source.into()]).unwrap();
+    let _retired = detach_staged_artifacts_for_clear(artifact_dir, Duration::from_secs(2)).unwrap();
+    // A real process exit skips Rust destructors and releases native file locks.
+    // The parent reopens the same store, publishes again, and retries recovery.
+    std::process::exit(86);
+}

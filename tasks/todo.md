@@ -1651,3 +1651,26 @@ Remaining #1964 work:
   allocation-heavy test ignored (`/tmp/zccache-1964-kv-full-green.log`).
 - The earlier remaining-work item 1 is now implemented, pending final review.
   Items 2–5 remain open; do not treat this checkpoint as completed #1964.
+
+
+### #1964 pending-trash accounting and process recovery (2026-10-22)
+
+- Captured accounting RED: maintenance reported only 17 pending-write bytes
+  while a 16 KiB retired payload remained (`/tmp/zccache-1964-trash-accounting-red.log`).
+- The physical scan now returns live eviction candidates separately from pending
+  trash allocation; both share inode deduplication. Pending trash contributes to
+  before/after usage and budget pressure, never becomes a live eviction key.
+- Three focused accounting regressions pass: recovered durable trash, partial
+  unlink failure retaining its allocated usage, and live/trash hardlinks counted
+  once with zero promised free-space gain. Receipts:
+  `/tmp/zccache-1964-trash-accounting-extended.log`.
+- A bounded child actually exits with a detached token still live, skipping Rust
+  destructors. Parent reopens the store, publishes the same key again, recovers
+  trash, and verifies the replacement remains readable. Passed with seven other
+  sweep regressions (`/tmp/zccache-1964-process-recovery.log`). The ignored child
+  fixture is explicitly executed by its parent; it is not an omitted assertion.
+- Full focused staged-store/reader/maintenance/Clear rerun passed:
+  `/tmp/zccache-1964-accounting-store-regressions.log`.
+- Still open: production KV recovery scheduling and crash regression, global
+  maintenance writer pause, generation replacement race, semantic Dylint and
+  required UI/OS/feature gates, docs/review/full gate/PR merge/main rebase.

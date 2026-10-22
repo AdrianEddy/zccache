@@ -556,11 +556,16 @@ fn legacy_key(name: &str) -> Option<(&str, Option<usize>)> {
     (key.len() <= 128 && !key.is_empty()).then_some((key, output_index))
 }
 
+#[cfg(test)]
 fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
+    scan_artifact_usage(artifact_dir).map(|(live, _)| live)
+}
+
+fn scan_artifact_usage(artifact_dir: &Path) -> io::Result<(Vec<DiskArtifact>, u64)> {
     let mut groups: HashMap<String, DiskArtifact> = HashMap::new();
     let mut seen = HashSet::new();
     if !artifact_dir.is_dir() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
     for entry in std::fs::read_dir(artifact_dir)?.flatten() {
         let path = entry.path();
@@ -620,7 +625,37 @@ fn scan_artifacts(artifact_dir: &Path) -> io::Result<Vec<DiskArtifact>> {
         )
         .ok();
     }
-    Ok(groups.into_values().collect())
+    // Retired names remain physical cache usage, but are never eviction
+    // candidates. Share inode identities with the live scan to avoid counting
+    // a hard-linked payload twice across the two namespaces.
+    let trash = staged_root.join(".trash");
+    let mut pending = DiskArtifact {
+        key: String::new(),
+        allocated_bytes: 0,
+        reclaimable_bytes: 0,
+        last_access: SystemTime::UNIX_EPOCH,
+        recently_published: false,
+        legacy_files: Vec::new(),
+        staged: false,
+        staged_generation: None,
+    };
+    match std::fs::symlink_metadata(&trash) {
+        Ok(metadata) => {
+            if !metadata.is_dir()
+                || crate::platform::fs::links::classify(&trash)?
+                    != crate::platform::fs::links::LinkKind::Regular
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "refusing cache accounting through linked trash",
+                ));
+            }
+            add_tree(&trash, &mut pending, &mut seen)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok((groups.into_values().collect(), pending.allocated_bytes))
 }
 
 struct MaintenancePass<'a> {
@@ -703,7 +738,7 @@ fn maintain_disk_artifacts_with_barrier(
     validate_owned_artifact_root(artifact_dir)?;
     let now = environment.now();
     let initial_space = environment.filesystem_space(artifact_dir)?;
-    let mut scanned = scan_artifacts(artifact_dir)?;
+    let (mut scanned, mut pending_trash_bytes) = scan_artifact_usage(artifact_dir)?;
     refresh_live_access(&mut scanned, artifacts, dep_graph, now);
     let mut retired_bytes = retired_top_level
         .as_ref()
@@ -717,7 +752,8 @@ fn maintain_disk_artifacts_with_barrier(
         .fold(pending_write_bytes, |total, artifact| {
             total.saturating_add(artifact.allocated_bytes)
         })
-        .saturating_add(retired_bytes);
+        .saturating_add(retired_bytes)
+        .saturating_add(pending_trash_bytes);
     let mut pressure = MaintenancePressure::None;
     let mut removed = HashSet::new();
     let mut expired_removed = HashSet::new();
@@ -736,7 +772,7 @@ fn maintain_disk_artifacts_with_barrier(
     artifact_bytes_reclaimed = artifact_bytes_reclaimed.saturating_add(
         sweep_staged_trash_for(artifact_dir, crate::core::wait::PROBE)?.reclaimed_bytes,
     );
-    scanned = scan_artifacts(artifact_dir)?;
+    (scanned, pending_trash_bytes) = scan_artifact_usage(artifact_dir)?;
     refresh_live_access(&mut scanned, artifacts, dep_graph, now);
 
     loop {
@@ -755,7 +791,7 @@ fn maintain_disk_artifacts_with_barrier(
             space,
             &scanned,
             pending_write_bytes,
-            retired_bytes,
+            retired_bytes.saturating_add(pending_trash_bytes),
             pressure,
         );
         // #1659: reclaim retired sibling stores before evicting any live
@@ -801,7 +837,7 @@ fn maintain_disk_artifacts_with_barrier(
                 commit_space,
                 &scanned,
                 pending_write_bytes,
-                retired_bytes,
+                retired_bytes.saturating_add(pending_trash_bytes),
                 pressure,
             );
             let removed = remove_planned_artifacts(
@@ -841,7 +877,7 @@ fn maintain_disk_artifacts_with_barrier(
             }
             removed.insert(key);
         }
-        scanned = scan_artifacts(artifact_dir)?;
+        (scanned, pending_trash_bytes) = scan_artifact_usage(artifact_dir)?;
         refresh_live_access(&mut scanned, artifacts, dep_graph, now);
     }
 
@@ -850,7 +886,8 @@ fn maintain_disk_artifacts_with_barrier(
         .fold(pending_write_bytes, |total, artifact| {
             total.saturating_add(artifact.allocated_bytes)
         })
-        .saturating_add(retired_bytes);
+        .saturating_add(retired_bytes)
+        .saturating_add(pending_trash_bytes);
     Ok(DiskMaintenanceReport {
         kind,
         pressure,
