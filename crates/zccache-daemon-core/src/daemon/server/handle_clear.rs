@@ -87,10 +87,22 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
     // Delete on-disk artifact files in parallel. V2 generations are a
     // directory tree and coordinate with active publishers through their
     // store lock; the legacy helper below handles only flat files.
-    match clear_staged_artifacts(&state.artifact_dir) {
-        Ok(bytes) => on_disk_bytes_freed = on_disk_bytes_freed.saturating_add(bytes),
-        Err(error) => tracing::warn!(%error, "failed to clear staged artifact generations"),
-    }
+    let artifact_dir = state.artifact_dir.clone();
+    let staged_trash = match kernal_api::async_engine::launch_blocking(move || {
+        detach_staged_artifacts_for_clear(artifact_dir.as_path(), crate::core::wait::PROBE)
+    })
+    .await
+    {
+        Ok(Ok(detached)) => Some(detached),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "failed to detach staged artifact generations");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "staged detach worker failed");
+            None
+        }
+    };
     if let Ok(entries) = std::fs::read_dir(&state.artifact_dir) {
         use rayon::prelude::*;
         let paths: Vec<_> = entries
@@ -139,6 +151,22 @@ pub(super) async fn handle_clear(state: &SharedState) -> Response {
     // directory does not exist.
     if let Some(cache_root) = state.artifact_dir.parent() {
         let _ = std::fs::remove_dir_all(cache_root.join("meson-configure"));
+    }
+
+    // Recursive staged deletion is independent from new publications now.
+    drop(_publication_guard);
+    if let Some(detached) = staged_trash {
+        match kernal_api::async_engine::launch_blocking(move || {
+            detached.sweep_for(crate::core::wait::PROBE)
+        })
+        .await
+        {
+            Ok(Ok(report)) => {
+                on_disk_bytes_freed = on_disk_bytes_freed.saturating_add(report.reclaimed_bytes)
+            }
+            Ok(Err(error)) => tracing::warn!(%error, "failed to sweep detached Clear trash"),
+            Err(error) => tracing::warn!(%error, "Clear sweep worker failed"),
+        }
     }
 
     tracing::info!(

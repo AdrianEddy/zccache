@@ -1575,3 +1575,55 @@ regressions and 3,661 main tests, final normal-wrapper Dylint on three OS
 selections and planted violations. Attested head `7cb7a78a80bf`, tree `cef40a9e0946`.
 Local review clean; ten focused liveness cases rerun independently. Main was
 rebased to origin/main (0/0), verified clean, and feature branches removed.
+
+#1964 runtime checkpoint (not ready to push):
+
+- Both original paused-sweep RED cases are GREEN. The additional retained-reader
+  conflict case was RED (resolved old path vanished), then GREEN: conflict
+  retires the pointer immediately, attempts generation retirement only after
+  dropping publication's native shared/key guards, and defers while readers
+  remain. Exclusive orphan collection revalidates the current pointer.
+- `DetachedStagedTrash` owns already-renamed paths; Drop does no filesystem work.
+  The sweep checks one shared deadline across enumeration/deletion and retries
+  durable leftovers. Only its recursive owner deletes staged trees. Final
+  empty-trash-directory unlink takes a zero-wait native exclusive permit to
+  avoid racing new detaches. Clear's prior clean layout is preserved.
+- Publication rollback/conflict/invalid-generation cleanup and startup orphan
+  cleanup use retirement rather than recursive deletion under native locks.
+  Normal maintenance returns sweep work from the publication commit. Planning
+  recursive scans run without a store guard. Clear's staged detach and sweep
+  run on the blocking lane; its staged sweep follows publication-writer drop.
+- 85 targeted regressions pass: 33 staged-store, 11 cached-artifact, 36 disk
+  maintenance, 5 Clear-handler (including ignored cases). Evidence:
+  /tmp/zccache-1964-maintenance-regressions.log. New cases include failed-delete
+  recovery, expired-sweep recovery, linked/reparse-root refusal and no traversal
+  through a trash-entry link. Windows junction fixture is present but only Linux
+  runtime has run locally so far.
+- Large source files were split: staged_store/publish.rs;
+  disk_maintenance_commit.rs and disk_maintenance_runtime.rs. Modified owners
+  are below 1,000 lines. Digest sidecar naming is shared with the sweep owner.
+
+Remaining #1964 work:
+1. Complete Clear's other cleanup: synchronous flat-file enumeration/removal,
+   metadata/depgraph snapshots, meson tree and exec KV namespace still run
+   under its publication writer (some on the async worker). Retire live names
+   atomically before releasing exclusion, then sweep on an owned blocking lane;
+   avoid erasing fresh post-Clear publications. Preserve WAL queue ordering,
+   lookup/startup leases and cancellation ownership. Do not simply drop the
+   writer and delete live paths. The current staged-only split is partial.
+2. Include failed/deferred trash in accounted cache usage. Reclaimed bytes now
+   use successful sweep unlink allocation and existing last-link/COW eligibility,
+   but pending .trash is skipped by current live-key scans. Add targeted
+   partial-failure/hardlink/COW accounting and real crash/restart recovery proof.
+3. Add actual global-publication pause regressions for maintenance and Clear,
+   generation replacement races and final two-second contention/Clear deadlines.
+   Existing new pause tests prove store-lock release with a real publisher;
+   existing Clear tests preserve hydration/lookup leases.
+4. Implement/register deny-level semantic Dylint for destructive sweep ownership
+   and forbidden slow filesystem/sweep work while publication/store guards live.
+   Cover aliases, UFCS/function items and wrappers; use typed phase capabilities
+   where liveness cannot be established. Preserve narrow justified owners;
+   private compile staging cleanup is distinct from shared store retirement.
+5. Update authoritative docs, final Clippy and cross-OS/feature lint coverage,
+   one clud-review invocation, full clean-tree gate, separate PR/merge, then
+   switch/rebase main onto origin/main and delete feature branches.
