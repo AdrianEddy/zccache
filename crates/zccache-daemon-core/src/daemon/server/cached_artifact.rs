@@ -411,15 +411,15 @@ fn ensure_payloads_for_materialization_with_guard(
             let is_staged = payloads.iter().any(
                 |payload| matches!(payload, CachedPayload::File(path) if is_staged_artifact_path(path)),
             );
-            if is_staged && staged_guard.is_none() {
-                // A concurrent resolver may have initialized the shared cell
-                // with staged paths after this request chose its lookup lane.
-                // Acquire ownership before those canonical paths can escape.
-                staged_guard = Some(
-                    acquire_guard(artifact_dir)
+            if is_staged {
+                // Match ownership explicitly: only the empty branch can acquire
+                // a new lease. An existing reader is moved straight back out.
+                staged_guard = Some(match staged_guard {
+                    Some(guard) => guard,
+                    None => acquire_guard(artifact_dir)
                         .map_err(|error| cache_read_failure(artifact_dir, error))?,
-                );
-            } else if !is_staged {
+                });
+            } else {
                 // A pointer may have disappeared before the shared lock was
                 // acquired, causing the resolver to fall back to pack/v1.
                 // Non-staged payloads must not retain the staged-store lock.

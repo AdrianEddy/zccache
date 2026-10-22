@@ -10,7 +10,7 @@ pub(super) const UNKNOWN: u8 = 4;
 pub(super) fn call<'tcx>(
     cx: &LateContext<'tcx>,
     callee: ty::Ty<'tcx>,
-    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>)>,
+    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
 ) -> u8 {
     match callee.kind() {
         ty::FnDef(definition, arguments) => {
@@ -37,76 +37,89 @@ fn function<'tcx>(
     cx: &LateContext<'tcx>,
     definition: DefId,
     arguments: ty::GenericArgsRef<'tcx>,
-    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>)>,
+    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
 ) -> u8 {
-    if seen.contains(&(definition, arguments)) {
-        return 0;
+    if let Some((_, _, effects)) = seen
+        .iter()
+        .find(|(id, args, _)| *id == definition && *args == arguments)
+    {
+        return effects.unwrap_or(0);
     }
-    if seen.len() >= 128 {
+    if seen
+        .iter()
+        .filter(|(_, _, effects)| effects.is_none())
+        .count()
+        >= 128
+    {
         return UNKNOWN;
     }
-    seen.push((definition, arguments));
-    let path = cx.get_def_path(definition);
-    let name = path.last().map(|name| name.as_str()).unwrap_or("");
-    let krate = cx.tcx.crate_name(definition.krate);
-    if matches!(krate.as_str(), "zccache_artifact" | "zccache_daemon_core")
-        && (path
-            .iter()
-            .any(|part| matches!(part.as_str(), "DetachedKvNamespace" | "DetachedStagedTrash"))
-            && matches!(name, "sweep_for" | "sweep_until")
-            || matches!(
-                name,
-                "sweep_staged_trash_for" | "sweep_retired_namespaces_for"
-            ))
-    {
-        return SWEEP;
-    }
-    if matches!(krate.as_str(), "std" | "tokio")
-        && (cx.tcx.def_kind(definition) == rustc_hir::def::DefKind::Fn
-            && path.iter().any(|part| part.as_str() == "fs")
-            && matches!(
-                name,
-                "read_dir" | "read" | "write" | "copy" | "remove_dir_all"
-            )
-            || matches!(
-                name,
-                "read_to_end" | "read_to_string" | "write_all" | "sync_all" | "sync_data"
-            ))
-    {
-        return BULK;
-    }
-    let Some(local) = definition.as_local() else {
-        return 0;
-    };
-    if !matches!(
-        cx.tcx.def_kind(definition),
-        rustc_hir::def::DefKind::Fn
-            | rustc_hir::def::DefKind::AssocFn
-            | rustc_hir::def::DefKind::Closure
-    ) {
-        return 0;
-    }
-    // Required trait methods have no MIR body. Their dynamic implementation
-    // cannot be assumed free of cleanup, and querying MIR would ICE rustc.
-    if cx.tcx.hir_maybe_body_owned_by(local).is_none() {
-        return UNKNOWN;
-    }
-    // Release the query borrow before following callees: a query for a callee
-    // may legitimately advance/consume MIR for an enclosing function.
-    let calls = {
-        let (stored, _) = cx.tcx.mir_promoted(local);
-        if stored.is_stolen() {
-            targets(cx, cx.tcx.optimized_mir(local))
-        } else {
-            targets(cx, &stored.borrow())
+    let index = seen.len();
+    seen.push((definition, arguments, None));
+    let result = (|| {
+        let path = cx.get_def_path(definition);
+        let name = path.last().map(|name| name.as_str()).unwrap_or("");
+        let krate = cx.tcx.crate_name(definition.krate);
+        if matches!(krate.as_str(), "zccache_artifact" | "zccache_daemon_core")
+            && (path
+                .iter()
+                .any(|part| matches!(part.as_str(), "DetachedKvNamespace" | "DetachedStagedTrash"))
+                && matches!(name, "sweep_for" | "sweep_until")
+                || matches!(
+                    name,
+                    "sweep_staged_trash_for" | "sweep_retired_namespaces_for"
+                ))
+        {
+            return SWEEP;
         }
-    };
-    calls.into_iter().fold(0, |effects, target| {
-        let target = ty::EarlyBinder::bind(target)
-            .instantiate(cx.tcx, arguments)
-            .skip_norm_wip();
-        effects | call(cx, target, seen)
-    })
+        if matches!(krate.as_str(), "std" | "tokio")
+            && (cx.tcx.def_kind(definition) == rustc_hir::def::DefKind::Fn
+                && path.iter().any(|part| part.as_str() == "fs")
+                && matches!(
+                    name,
+                    "read_dir" | "read" | "write" | "copy" | "remove_dir_all"
+                )
+                || matches!(
+                    name,
+                    "read_to_end" | "read_to_string" | "write_all" | "sync_all" | "sync_data"
+                ))
+        {
+            return BULK;
+        }
+        let Some(local) = definition.as_local() else {
+            return 0;
+        };
+        if !matches!(
+            cx.tcx.def_kind(definition),
+            rustc_hir::def::DefKind::Fn
+                | rustc_hir::def::DefKind::AssocFn
+                | rustc_hir::def::DefKind::Closure
+        ) {
+            return 0;
+        }
+        // Required trait methods have no MIR body. Their dynamic implementation
+        // cannot be assumed free of cleanup, and querying MIR would ICE rustc.
+        if cx.tcx.hir_maybe_body_owned_by(local).is_none() {
+            return UNKNOWN;
+        }
+        // Release the query borrow before following callees: a query for a callee
+        // may legitimately advance/consume MIR for an enclosing function.
+        let calls = {
+            let (stored, _) = cx.tcx.mir_promoted(local);
+            if stored.is_stolen() {
+                targets(cx, cx.tcx.optimized_mir(local))
+            } else {
+                targets(cx, &stored.borrow())
+            }
+        };
+        calls.into_iter().fold(0, |effects, target| {
+            let target = ty::EarlyBinder::bind(target)
+                .instantiate(cx.tcx, arguments)
+                .skip_norm_wip();
+            effects | call(cx, target, seen)
+        })
+    })();
+    seen[index].2 = Some(result);
+    result
 }
 
 fn targets<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<ty::Ty<'tcx>> {

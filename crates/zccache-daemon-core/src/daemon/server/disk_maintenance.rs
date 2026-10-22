@@ -827,10 +827,13 @@ fn maintain_disk_artifacts_with_barrier(
             // short destructive commit, then refresh live access and re-plan
             // under the writer so a hit/publication that raced the scan is
             // not evicted as stale.
+            // Volume-space queries may block and cannot be made atomic with
+            // foreign writers by our publication barrier. Refresh immediately
+            // before acquisition; revalidate in-memory access under exclusion.
+            let commit_space = environment.filesystem_space(artifact_dir)?;
             let _publication_guard =
                 publication_barrier.blocking_write_for(crate::core::sync::OPERATION_TIMEOUT);
             refresh_live_access(&mut scanned, artifacts, dep_graph, now);
-            let commit_space = environment.filesystem_space(artifact_dir)?;
             let commit_plan = plan_maintenance_at_least(
                 policy,
                 kind,

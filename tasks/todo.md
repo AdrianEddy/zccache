@@ -1930,3 +1930,28 @@ Remaining enforcement work before #1964 can ship:
   legacy cleanup behavior is unchanged.
 - All 96 declared bosn staged-store regressions pass
   (/tmp/zccache-1964-pointer-budget-compatible-green.log).
+
+### #1964 explicit operation phases and effect memoization (2026-10-22)
+
+- Spawn materialization returns sealed MaterializationPermit, preserving its
+  existing native RwLock/watchdog lifetime. Its data-free whole-copy role permits
+  copy I/O but still excludes shared cleanup. Publication/store commits retain
+  their stricter role. All four declared spawn-watchdog tests pass, including
+  real termination of the 120-second wedged materialization holder
+  (/tmp/zccache-1964-materialization-permit-runtime.log).
+- Effect traversal memoizes concrete completed summaries; its limit now counts
+  active recursion rather than total callees. This removes graph-width false
+  UNKNOWN effects. All 21 UI fixtures pass
+  (/tmp/zccache-1964-effect-memo-ui.log).
+- Reader reacquisition now matches Option ownership explicitly: the existing
+  reader moves through unchanged, and only None calls the generic factory.
+- Refresh filesystem-space immediately before taking publication exclusion.
+  Volume space is not made atomic with foreign writers by that barrier; live
+  in-memory access is still refreshed under it. This removes the potentially
+  slow resource query from the commit while retaining the near-commit refresh.
+- All 96 staged-store regressions pass again
+  (/tmp/zccache-1964-callback-phase-runtime.log). Production lint now has exactly
+  two diagnostics, both immediate-name enumeration under Clear exclusion
+  (/tmp/zccache-1964-callback-phase-workspace.log). This is not a final green gate;
+  bounded fixed-depth detach capability/enforcement and remaining acceptance
+  requirements still need completion before review/push/merge.

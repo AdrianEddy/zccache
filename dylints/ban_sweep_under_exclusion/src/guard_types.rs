@@ -12,6 +12,14 @@ pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId)
     let name = cx.tcx.item_name(definition);
     let krate = cx.tcx.crate_name(definition.krate);
     match krate.as_str() {
+        "zccache_daemon_core"
+            if name.as_str() == "MaterializationPermit"
+                && cx.tcx.opt_parent(definition).is_some_and(|parent| {
+                    cx.tcx.item_name(parent).as_str() == "spawn_exclusion"
+                }) =>
+        {
+            Some(Scope::Any)
+        }
         "zccache_core" => match name.as_str() {
             "PublicationCommitPermit" | "MutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard" => {
                 Some(Scope::Critical)
