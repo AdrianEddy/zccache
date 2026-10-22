@@ -28,4 +28,11 @@ fn owned_arc(permit: PublicationReadPermit, cleanup: std::sync::Arc<Cleanup>) {
     drop(cleanup);
     drop(permit);
 }
+fn partial(permit: PublicationReadPermit, retired: &mut Vec<Cleanup>, pair: (Cleanup, Cleanup)) {
+    {
+        let pair = pair;
+        retired.push(pair.0);
+    }
+    drop(permit);
+}
 fn main() {}

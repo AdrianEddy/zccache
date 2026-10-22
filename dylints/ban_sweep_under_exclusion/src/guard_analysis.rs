@@ -134,12 +134,22 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             mir::TerminatorKind::Call { func, .. } => {
                 super::effects::call(cx, func.ty(&body.local_decls, cx.tcx), &mut Vec::new())
             }
-            mir::TerminatorKind::Drop { place, .. } => super::effects::drop_value(
-                cx,
-                place.ty(&body.local_decls, cx.tcx).ty,
-                &mut Vec::new(),
-                &mut Vec::new(),
-            ),
+            mir::TerminatorKind::Drop { place, .. } => {
+                super::drop_paths::live_types(cx, body, *place, |place| {
+                    match data.rev_lookup.find(place.as_ref()) {
+                        rustc_mir_dataflow::move_paths::LookupResult::Exact(index)
+                        | rustc_mir_dataflow::move_paths::LookupResult::Parent(Some(index)) => {
+                            cursor.get().contains(index)
+                        }
+                        rustc_mir_dataflow::move_paths::LookupResult::Parent(None) => true,
+                    }
+                })
+                .into_iter()
+                .fold(0, |effects, value| {
+                    effects
+                        | super::effects::drop_value(cx, value, &mut Vec::new(), &mut Vec::new())
+                })
+            }
             _ => continue,
         };
         let index = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {

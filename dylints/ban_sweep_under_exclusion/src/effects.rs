@@ -125,9 +125,12 @@ fn function<'tcx>(
         let calls = {
             let (stored, _) = cx.tcx.mir_promoted(local);
             if stored.is_stolen() {
-                targets(cx, cx.tcx.optimized_mir(local))
+                targets(cx, cx.tcx.optimized_mir(local).clone(), false)
             } else {
-                targets(cx, &stored.borrow())
+                {
+                    let body = (*stored.borrow()).clone();
+                    targets(cx, body, true)
+                }
             }
         };
         calls.into_iter().fold(0, |effects, target| {
@@ -159,19 +162,73 @@ enum Target<'tcx> {
     Call(ty::Ty<'tcx>),
     Drop(ty::Ty<'tcx>),
 }
-fn targets<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<Target<'tcx>> {
-    body.basic_blocks
-        .iter()
-        .filter_map(|block| match &block.terminator().kind {
+fn targets<'tcx>(
+    cx: &LateContext<'tcx>,
+    mut owned: mir::Body<'tcx>,
+    precise: bool,
+) -> Vec<Target<'tcx>> {
+    use rustc_mir_dataflow::{
+        move_paths::{LookupResult, MoveData},
+        Analysis,
+    };
+    if !precise {
+        // Optimized MIR already has real drop elaboration. Do not feed its
+        // Deinit/SetDiscriminant statements into pre-borrowck MoveData.
+        return owned
+            .basic_blocks
+            .iter()
+            .filter_map(|block| match &block.terminator().kind {
+                mir::TerminatorKind::Call { func, .. } => {
+                    Some(Target::Call(func.ty(&owned.local_decls, cx.tcx)))
+                }
+                mir::TerminatorKind::Drop { place, .. } => {
+                    Some(Target::Drop(place.ty(&owned.local_decls, cx.tcx).ty))
+                }
+                _ => None,
+            })
+            .collect();
+    }
+    for block in owned.basic_blocks.as_mut() {
+        if let Some(terminator) = &mut block.terminator {
+            if let mir::TerminatorKind::FalseEdge { real_target, .. }
+            | mir::TerminatorKind::FalseUnwind { real_target, .. } = terminator.kind
+            {
+                terminator.kind = mir::TerminatorKind::Goto {
+                    target: real_target,
+                };
+            }
+        }
+    }
+    let body = &owned;
+    let data = MoveData::gather_moves(body, cx.tcx, |_| true);
+    let mut cursor = super::guard_initialization::GuardInitialization::new(cx.tcx, body, &data)
+        .iterate_to_fixpoint(cx.tcx, body, None)
+        .into_results_cursor(body);
+    let mut result = Vec::new();
+    for (block, value) in body.basic_blocks.iter_enumerated() {
+        match &value.terminator().kind {
             mir::TerminatorKind::Call { func, .. } => {
-                Some(Target::Call(func.ty(&body.local_decls, cx.tcx)))
+                result.push(Target::Call(func.ty(&body.local_decls, cx.tcx)))
             }
             mir::TerminatorKind::Drop { place, .. } => {
-                Some(Target::Drop(place.ty(&body.local_decls, cx.tcx).ty))
+                cursor.seek_before_primary_effect(mir::Location {
+                    block,
+                    statement_index: value.statements.len(),
+                });
+                let live = super::drop_paths::live_types(cx, body, *place, |place| {
+                    match data.rev_lookup.find(place.as_ref()) {
+                        LookupResult::Exact(index) | LookupResult::Parent(Some(index)) => {
+                            cursor.get().contains(index)
+                        }
+                        LookupResult::Parent(None) => true,
+                    }
+                });
+                result.extend(live.into_iter().map(Target::Drop));
             }
-            _ => None,
-        })
-        .collect()
+            _ => {}
+        }
+    }
+    result
 }
 
 pub(super) fn drop_value<'tcx>(

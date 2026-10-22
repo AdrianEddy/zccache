@@ -2076,3 +2076,32 @@ Remaining enforcement work before #1964 can ship:
 - Full staged-store-regressions passes all 98 tests with the new fixture
   (/tmp/zccache-1964-provisional-owner-regressions.log), including the previously
   failed one-second observation. No timing threshold or test concurrency changed.
+
+### #1964 initialized drop-field summaries (2026-10-22)
+
+- RED: transferred_cleanup rejected retain(&mut retired, cleanup) even though the
+  cleanup owner moves into an outer collection rather than being destroyed
+  (/tmp/zccache-1964-drop-transfer-red.log).
+- Effect summaries now use initialized-place dataflow for promoted MIR drops,
+  remove imaginary borrow-checking edges, and retain optimized MIR's already
+  elaborated drops without feeding optimized statements into MoveData.
+- New drop_paths shares field/variant initialization semantics between local
+  guard checks and transitive summaries. It excludes moved-out fields and inactive
+  enum variants, preserves actual remaining siblings/destructors, and respects
+  union/ManuallyDrop non-dropping semantics. This resolves the deferred-owner
+  Option tuple placeholders reported at Clear's removal loop.
+- All 29 fixtures pass (/tmp/zccache-1964-drop-fields-final.log), including
+  Option<(String, Cleanup)> transfer acceptance and partially retained sibling
+  cleanup denial. Production diagnostics for Clear and maintenance removal are
+  gone, but full production lint remains RED with 26 other diagnostics
+  (/tmp/zccache-1964-drop-fields-workspace.log). Do not claim the production gate
+  passed based on older pre-destructor logs.
+- Remaining work includes consumed async MIR, opaque/generic drop contracts,
+  and ownership transfer into checked callees. Any call-boundary exemption must
+  retain checks for caller-held sibling guards and generic guard hiding/erasure;
+  do not exempt arbitrary moved arguments into unchecked generic helpers.
+  Consider preserving promoted MIR before transitive queries consume it, or a
+  validated optimized-MIR lifetime backend; neither is implemented yet.
+- Native private-plan deferral is already separately GREEN in the 98-test bosn
+  regression receipt above. OS/features/planted cases, docs, clippy, one review,
+  clean committed full gate, PR merge/main rebase/cleanup remain required.
