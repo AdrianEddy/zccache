@@ -331,6 +331,9 @@ fn store_rustc_outputs(
     resource_admission: crate::daemon::server::compile_resource_gate::CompileResourcePermit,
     materialization_mode: MaterializationMode,
 ) {
+    // Retired records outlive exclusion even on an early return or unwind.
+    let mut retired_artifacts = Vec::new();
+    let publication = publication_guard;
     let state = state_arc.as_ref();
     let t_artifact_meta_build = Instant::now();
     // Issue #629: the prior four-pass shape (`.iter().map().sum()`
@@ -421,10 +424,11 @@ fn store_rustc_outputs(
             let published = kernal_api::async_engine::launch_blocking(move || {
                 // Cancellation releases the first capture; execution releases
                 // the last local before staged-plan cleanup can remove a tree.
-                let _ = &publication_guard;
+                let _ = &publication;
+                let mut retired_artifacts = Vec::new();
                 let _resource_admission = resource_admission;
                 let _staged_plan = plan_for_publish;
-                let _publication_guard = publication_guard;
+                let _publication = publication;
                 let snapshot =
                     persist_artifact_paths_with_stats(&artifact_dir, &key_hex, &source_paths, materialization_mode)?;
                 commit_rustc_artifact_index(
@@ -432,6 +436,7 @@ fn store_rustc_outputs(
                     key_hex,
                     meta,
                     snapshot.staged,
+                    &mut retired_artifacts,
                 )
                 .map_err(|reason| {
                     std::io::Error::other(format!(
@@ -546,6 +551,7 @@ fn store_rustc_outputs(
                 artifact_key_hex.to_string(),
                 meta,
                 snapshot_stats.staged,
+                &mut retired_artifacts,
             ) {
                 Ok(elapsed_ns) => (None, elapsed_ns),
                 Err(reason) => (Some(reason), 0),
@@ -614,7 +620,7 @@ fn store_rustc_outputs(
         t.record_miss(src, artifact_bytes);
     });
     stats.artifact_insert_stats_ns = t_artifact_insert_stats.elapsed().as_nanos() as u64;
-    drop(publication_guard);
+    drop(publication);
     drop(resource_admission);
 }
 

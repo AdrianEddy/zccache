@@ -20,6 +20,7 @@ pub(super) fn commit_rustc_artifact_index(
     key_hex: String,
     mut meta: ArtifactIndex,
     staged: bool,
+    retired: &mut Vec<CachedArtifact>,
 ) -> Result<u64, StagedPublishFailure> {
     use dashmap::mapref::entry::Entry;
 
@@ -40,7 +41,7 @@ pub(super) fn commit_rustc_artifact_index(
         Entry::Occupied(mut entry) => {
             meta = super::super::rustc_index::merge_rustc_index(meta, entry.get().meta.clone());
             let commit_ns = commit(meta.clone())?;
-            entry.insert(CachedArtifact::from_index(meta));
+            retired.push(entry.insert(CachedArtifact::from_index(meta)));
             Ok(commit_ns)
         }
         Entry::Vacant(entry) => {
