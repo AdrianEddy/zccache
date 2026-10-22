@@ -94,6 +94,12 @@ pub(super) async fn handle_compile_multi(
     let mut join_set = tokio::task::JoinSet::new();
     let scan_cache = Arc::clone(&state.include_scan_cache);
     for (idx, compilation) in compilations.iter().enumerate() {
+        let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+            return Response::Error {
+                message: "multi cache lookup declined because cache-root ownership was released"
+                    .into(),
+            };
+        };
         let request_profile = crate::daemon::staged_stats::current_request_profile();
         let state = Arc::clone(&state);
         let cwd_path = cwd_path.clone();
@@ -109,7 +115,7 @@ pub(super) async fn handle_compile_multi(
             async move {
                 let work_state = Arc::clone(&state);
                 state
-                    .launch_blocking(move || {
+                    .launch_blocking_with_root(root, move || {
                         (
                             idx,
                             check_unit_cache(

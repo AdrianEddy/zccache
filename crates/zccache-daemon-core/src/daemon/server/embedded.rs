@@ -55,7 +55,12 @@ impl EmbeddedDaemon {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.state.launch_blocking(operation)
+        let root = self
+            .state
+            .cache_root_lock
+            .lease_for(STATE_TIMEOUT)
+            .expect("test work requires native cache-root ownership");
+        self.state.launch_blocking_with_root(root, operation)
     }
 
     #[cfg(test)]

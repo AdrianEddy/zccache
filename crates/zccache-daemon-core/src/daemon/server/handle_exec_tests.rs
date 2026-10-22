@@ -639,3 +639,39 @@ async fn direct_exec_persistence_admission_deadline_releases_publication() {
             "expired direct exec admission retained publication while capacity remained unavailable");
     }).await;
 }
+
+#[tokio::test]
+async fn released_root_declines_exec_hit_without_materializing_or_falling_back() {
+    crate::test_support::test_timeout(async {
+        let temp = tempdir().unwrap();
+        let endpoint = crate::ipc::unique_test_endpoint();
+        let cache_dir = NormalizedPath::new(temp.path().join("cache"));
+        let server = DaemonServer::bind_with_cache_dir(&endpoint, &cache_dir).unwrap();
+        let key = "9".repeat(64);
+        let artifact = ArtifactData {
+            outputs: vec![ArtifactOutput {
+                name: "result.bin".into(),
+                payload: ArtifactPayload::Bytes(Arc::new(b"cached output".to_vec())),
+            }],
+            stdout: Arc::new(Vec::new()),
+            stderr: Arc::new(Vec::new()),
+            exit_code: 0,
+        };
+        server.state.artifacts.insert(key.clone(), CachedArtifact::from_artifact_data(&artifact));
+        server.state.cache_root_lock.release();
+        let response = try_exec_cache_hit(
+            &server.state,
+            &key,
+            temp.path(),
+            &[NormalizedPath::from("result.bin")],
+            ExecOutputStreams::default(),
+            MaterializationMode::Auto,
+        )
+        .await;
+        assert!(matches!(response, Some(Response::Error { ref message }) if message.contains("cache-root ownership")),
+            "released ownership must be a terminal response, not a hit or a soft miss");
+        assert!(!temp.path().join("result.bin").exists(), "closed-root work wrote the output");
+        assert_eq!(server.state.active_cache_requests(), 0);
+    })
+    .await;
+}

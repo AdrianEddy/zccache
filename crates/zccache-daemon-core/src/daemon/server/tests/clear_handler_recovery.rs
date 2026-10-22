@@ -39,8 +39,9 @@ async fn retry_retired_namespace(clear: bool) {
             .await
             .unwrap();
         let state = Arc::clone(&server.state);
+        let root = state.cache_root_lock.lease_for(STATE_TIMEOUT).unwrap();
         state
-            .launch_blocking({
+            .launch_blocking_with_root(root, {
                 let state = Arc::clone(&state);
                 move || {
                     drop(

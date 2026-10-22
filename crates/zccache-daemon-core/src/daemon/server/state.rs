@@ -404,17 +404,6 @@ pub(super) struct SharedState {
 }
 
 impl SharedState {
-    pub(super) fn launch_blocking<F, R>(
-        self: &Arc<Self>,
-        operation: F,
-    ) -> kernal_api::async_engine::Task<R>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        self.launch_owned_blocking((), operation)
-    }
-
     /// Keep native root ownership through the tracked activity's final state
     /// destruction, including cleanup that happens after the operation returns.
     pub(super) fn launch_blocking_with_root<F, R>(
@@ -426,19 +415,6 @@ impl SharedState {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.launch_owned_blocking(root, operation)
-    }
-
-    fn launch_owned_blocking<F, R, Owner>(
-        self: &Arc<Self>,
-        owner: Owner,
-        operation: F,
-    ) -> kernal_api::async_engine::Task<R>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-        Owner: Send + 'static,
-    {
         let request_profile = crate::daemon::staged_stats::current_request_profile();
         self.active_cache_requests.fetch_add(1, Ordering::AcqRel);
         let activity = OwnedActiveCacheRequest {
@@ -449,7 +425,7 @@ impl SharedState {
             // the owner; execution/unwind uses the reverse local drop order.
             let _ = &operation;
             let _ = &activity;
-            let _owner = owner;
+            let _root = root;
             let _activity = activity;
             crate::daemon::staged_stats::scope_blocking_request_profile(request_profile, operation)
         };

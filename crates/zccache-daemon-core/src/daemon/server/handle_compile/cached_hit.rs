@@ -104,12 +104,18 @@ pub(super) async fn materialize_cached_compile_hit_offloaded(
     request: OwnedCachedHitMaterializeRequest,
 ) -> Result<Response, CachedHitFailure> {
     let launcher = Arc::clone(&request.state);
+    let Some(root) = launcher.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+        return Ok(Response::Error {
+            message: "compile cache lookup declined because cache-root ownership was released"
+                .into(),
+        });
+    };
     // The blocking materializer runs outside this task's scope, so the
     // embedded admission observation (#1550) reads the served size here.
     let observed_key =
         test_harness_admission::observing().then(|| request.artifact_key_hex.clone());
     let result = match launcher
-        .launch_blocking(move || {
+        .launch_blocking_with_root(root, move || {
             materialize_cached_compile_hit(CachedHitMaterializeRequest {
                 state: &request.state,
                 sid: &request.sid,

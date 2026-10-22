@@ -677,12 +677,17 @@ async fn try_exec_cache_hit(
     output_streams: ExecOutputStreams,
     mode: MaterializationMode,
 ) -> Option<Response> {
+    let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+        return Some(Response::Error {
+            message: "exec cache lookup declined because cache-root ownership was released".into(),
+        });
+    };
     let work_state = Arc::clone(state);
     let key_hex = key_hex.to_owned();
     let cwd = cwd.to_path_buf();
     let output_files = output_files.to_vec();
     match state
-        .launch_blocking(move || {
+        .launch_blocking_with_root(root, move || {
             try_exec_cache_hit_blocking(
                 &work_state,
                 &key_hex,

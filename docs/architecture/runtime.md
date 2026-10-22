@@ -179,9 +179,9 @@ wrapper retains ownership through its tracked activity's final state destruction
 including private-plan cleanup after the callback returns or unwinds. Keeping the
 lease only inside the callback is insufficient. Regressions drop the server,
 pause that actual last-owner cleanup, probe native exclusion, and prove root reuse
-after the tracked task finishes. Other users of the legacy root-free tracked
-launch entrypoint still require migration; these tests establish the root-owning
-facade's contract.
+after the tracked task finishes. The draft now removes the root-free tracked launch entrypoint and requires a
+concrete lease at its callers. The latest focused released-root check passes;
+validation of the complete caller migration remains unfinished.
 The WAL actor receives a service root lease before it is spawned. All of its
 index writes (periodic/batch flush, removal, Clear and final drain) use a private
 nonblocking job constructor requiring shared root ownership. Each blocking job
