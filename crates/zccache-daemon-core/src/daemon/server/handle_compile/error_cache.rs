@@ -1,5 +1,6 @@
 //! Rustc error-cache helpers for the compile pipeline.
 
+use super::super::cached_artifact_retirement::retire_for;
 use super::super::*;
 
 pub(super) fn compile_failure_stderr(message: String) -> Response {
@@ -157,32 +158,8 @@ pub(super) async fn maybe_store_rustc_error_artifact(
         &mut retired,
     );
     drop(publication_guard);
-    retire_verdict_artifacts_for(retired, crate::core::sync::OPERATION_TIMEOUT).await;
+    retire_for(retired, crate::core::sync::OPERATION_TIMEOUT).await;
     Some(artifact_key_hex)
-}
-
-// Schedule before returning the future: an unpolled/cancelled waiter must
-// never inherit recursive record cleanup on an async worker.
-fn retire_verdict_artifacts_for(
-    retired: Vec<CachedArtifact>,
-    bound: std::time::Duration,
-) -> impl std::future::Future<Output = ()> {
-    let task = if retired.is_empty() {
-        None
-    } else {
-        Some(kernal_api::async_engine::launch_blocking(move || drop(retired)).detach_on_drop())
-    };
-    async move {
-        if let Some(task) = task {
-            match kernal_api::async_engine::timeout(bound, task).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::warn!(%error, "retired verdict cleanup task failed"),
-                Err(_) => tracing::warn!(
-                    "retired verdict cleanup exceeded its wait budget; owned cleanup continues"
-                ),
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -537,7 +514,7 @@ mod tests {
             let hook = StagedHookGuard::arm(&private, StagedHookPoint::PrivatePlanCleanup);
             // Deliberately never poll this waiter. Scheduling owns the records
             // immediately, rather than leaving them in an unpolled async frame.
-            let waiter = retire_verdict_artifacts_for(vec![record], Duration::from_secs(5));
+            let waiter = retire_for(vec![record], Duration::from_secs(5));
             let hook = tokio::task::spawn_blocking(move || {
                 hook.wait_until_reached_for(Duration::from_secs(10));
                 hook

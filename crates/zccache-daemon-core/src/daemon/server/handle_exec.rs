@@ -543,11 +543,18 @@ pub(super) async fn handle_generic_tool_exec(
                 message: format!("failed to materialize generic tool outputs: {error}"),
             };
         }
-        if let Some(cached) = staged_cached_artifact {
-            state.artifacts.insert(final_full_hex.clone(), cached);
-        }
     }
-    drop(staged_publication_guard);
+    if let Some(cached) = staged_cached_artifact {
+        super::exec_publication::finish_staged_exec_publication(
+            state,
+            &final_full_hex,
+            cached,
+            staged_publication_guard,
+        )
+        .await;
+    } else {
+        drop(staged_publication_guard);
+    }
 
     drop(coalesce_guard); // Releasing the guard wakes any waiters.
 

@@ -183,6 +183,7 @@ impl EmbeddedFlushReport {
 
 mod cache_trim;
 mod cached_artifact;
+mod cached_artifact_retirement;
 mod client_env;
 mod compile_concurrency;
 mod compile_progress;
@@ -197,6 +198,7 @@ mod disk_maintenance_progress;
 pub use disk_maintenance_progress::DiskMaintenanceProgress;
 mod embedded;
 mod embedded_bringup;
+mod exec_publication;
 mod handle_clear;
 mod handle_compile;
 mod handle_compile_ephemeral;
