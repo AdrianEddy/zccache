@@ -6,6 +6,7 @@ extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
+mod blocking_transfer;
 mod checked_transfer;
 mod cleanup_owners;
 mod completed_future;

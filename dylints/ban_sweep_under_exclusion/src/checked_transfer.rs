@@ -16,7 +16,7 @@ pub(super) fn moves<'tcx>(
         return Vec::new();
     };
     let Some(local) = definition.as_local() else {
-        return Vec::new();
+        return super::blocking_transfer::moves(cx, body, terminator, scope);
     };
     if !matches!(
         cx.tcx.def_kind(definition),
@@ -64,7 +64,7 @@ pub(super) fn moves<'tcx>(
         .collect()
 }
 
-fn known_output<'tcx>(
+pub(super) fn known_output<'tcx>(
     cx: &LateContext<'tcx>,
     value: ty::Ty<'tcx>,
     seen: &mut Vec<ty::Ty<'tcx>>,

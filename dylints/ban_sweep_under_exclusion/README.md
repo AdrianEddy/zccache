@@ -22,6 +22,12 @@ guard parameter types and move paths. Other caller-held guards remain live.
 Generic parameters, borrowed guards, foreign callees, async callees and opaque
 or guard-owning return values do not establish this transfer contract. The
 callee remains subject to guard checks, including destructor and unwind paths.
+The canonical `kernal_api::async_engine::launch_blocking` handoff additionally
+accepts checked local closures when capture destruction releases exclusion
+before forbidden cleanup on cancellation. Direct guards and structural
+Option/Result/tuple wrappers have release proofs; shared or manually suppressed
+owners do not. The invoked closure body is still checked independently, and
+other caller-held guards remain live. Async task launches have no such contract.
 
 The core publication facade distinguishes blocking commit permits from complete
 admission operations and async checkpoint/shutdown drains. The workspace gate
