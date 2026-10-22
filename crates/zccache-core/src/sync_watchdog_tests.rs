@@ -39,6 +39,44 @@ fn watchdog_terminates_native_guard_holder() {
     assert_holder_is_terminated("native");
 }
 
+fn assert_termination_with_unread_stderr(case: &str) {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "sync::watchdog_tests::watchdog_child"])
+        .env("ZCCACHE_WATCHDOG_TEST_CASE", case)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Deliberately own but never drain the pipe: the child fills it while
+    // holding stderr's internal lock. This test must not use captured output.
+    let _unread_stderr = child.stderr.take().unwrap();
+    let status = crate::wait::child_for(&mut child, STATE_TIMEOUT + Duration::from_secs(5))
+        .expect("a blocked diagnostic sink must not prevent termination");
+    assert!(!status.success());
+}
+
+#[test]
+fn blocked_stderr_cannot_disable_holder_termination() {
+    assert_termination_with_unread_stderr("blocked-stderr");
+}
+
+#[test]
+fn blocked_stderr_cannot_disable_essential_acquisition_termination() {
+    assert_termination_with_unread_stderr("blocked-acquisition-stderr");
+}
+
+fn block_stderr() {
+    use std::io::Write;
+    let (ready, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stderr = std::io::stderr().lock();
+        ready.send(()).unwrap();
+        stderr.write_all(&vec![b'x'; 16 * 1024 * 1024]).unwrap();
+        park_forever();
+    });
+    receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
 #[test]
 fn essential_acquisition_expiry_dumps_holder_and_waiter_despite_capture() {
     let output = crate::wait::output_for(
@@ -110,6 +148,19 @@ fn watchdog_child() {
     let Ok(case) = std::env::var("ZCCACHE_WATCHDOG_TEST_CASE") else {
         return;
     };
+    if case == "blocked-stderr" {
+        let lock = crate::blocking_sync::Mutex::new(0);
+        let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();
+        block_stderr();
+        park_forever();
+    }
+    if case == "blocked-acquisition-stderr" {
+        let lock = crate::blocking_sync::Mutex::with_hold_limit(0, Duration::from_secs(60));
+        let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();
+        block_stderr();
+        let _waiter = lock.lock_for(Duration::from_millis(1)).unwrap();
+        unreachable!("a held mutex cannot be acquired twice");
+    }
     if case == "acquisition" {
         let lock = crate::blocking_sync::Mutex::with_hold_limit(0, Duration::from_secs(60));
         let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();

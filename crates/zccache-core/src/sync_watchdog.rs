@@ -2,6 +2,7 @@
 use std::io::Write;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -41,9 +42,60 @@ fn thread_name() -> String {
         .map_or_else(|| format!("{:?}", thread.id()), str::to_owned)
 }
 
-pub(crate) fn dump_context() {
+pub(crate) fn acquisition_failed(site: &Location<'_>, error: super::sync::LockTimeout) -> ! {
     let entries = with_entries(|entries| entries.clone());
-    let _ = std::io::stderr().write_all(report(&entries, Instant::now(), false).as_bytes());
+    let text = format!(
+        "bounded synchronization failed at {site}: {error}\n{}",
+        report(&entries, Instant::now(), false)
+    );
+    abort_after_report(reporter(), text)
+}
+
+struct Diagnostic {
+    text: String,
+    complete: Option<SyncSender<()>>,
+}
+
+/// Exactly one process-lifetime writer and one queued report. A stuck sink
+/// cannot accumulate writers or prevent the monitor from enforcing hold limits.
+fn reporter() -> &'static SyncSender<Diagnostic> {
+    static REPORTER: OnceLock<SyncSender<Diagnostic>> = OnceLock::new();
+    REPORTER.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel::<Diagnostic>(1);
+        let _worker = std::thread::Builder::new()
+            .name("zccache-lock-diagnostics".into())
+            .spawn(move || loop {
+                let diagnostic = match receiver.recv_timeout(Duration::from_secs(1)) {
+                    Ok(diagnostic) => diagnostic,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                };
+                // Direct I/O survives libtest capture. Only this dedicated
+                // writer can block on the sink; never the monitor/abort path.
+                let _ = std::io::stderr().write_all(diagnostic.text.as_bytes());
+                if let Some(complete) = diagnostic.complete {
+                    let _ = complete.try_send(());
+                }
+            })
+            .unwrap_or_else(|_| std::process::abort());
+        sender
+    })
+}
+
+fn abort_after_report(sender: &SyncSender<Diagnostic>, text: String) -> ! {
+    let (complete, receiver) = mpsc::sync_channel(1);
+    if sender
+        .try_send(Diagnostic {
+            text,
+            complete: Some(complete),
+        })
+        .is_ok()
+    {
+        // Healthy sinks get a chance to finish the complete context. A full
+        // pipe, logging lock, broken worker or full queue cannot defer abort.
+        let _ = receiver.recv_timeout(Duration::from_millis(250));
+    }
+    std::process::abort()
 }
 
 #[cfg(test)]
@@ -149,27 +201,30 @@ fn decision(entries: &mut [Entry], now: Instant) -> Option<(bool, Vec<Entry>)> {
 fn start() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
+        let sender = reporter().clone();
         if let Err(error) = std::thread::Builder::new()
             .name("zccache-lock-watchdog".into())
-            .spawn(|| loop {
+            .spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(100));
                 let now = Instant::now();
                 let observation = with_entries(|entries| decision(entries, now));
                 if let Some((abort, entries)) = observation {
-                    // Direct I/O survives libtest's thread-local print capture.
-                    let _ = std::io::stderr().write_all(report(&entries, now, abort).as_bytes());
+                    let text = report(&entries, now, abort);
                     if abort {
-                        std::process::abort();
+                        abort_after_report(&sender, text);
                     }
+                    let _ = sender.try_send(Diagnostic {
+                        text,
+                        complete: None,
+                    });
                 }
             })
         {
-            let _ = writeln!(
-                std::io::stderr(),
-                "zccache: lock watchdog could not start: {error}"
-            );
             // A missing backstop must not silently downgrade the safety contract.
-            std::process::abort();
+            abort_after_report(
+                reporter(),
+                format!("zccache: lock watchdog could not start: {error}\n"),
+            );
         }
     });
 }

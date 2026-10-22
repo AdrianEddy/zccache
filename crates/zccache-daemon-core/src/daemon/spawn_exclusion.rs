@@ -39,6 +39,8 @@ use zccache_core::blocking_sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 // Shared holds cover fork/exec only. Exclusive holds include a whole artifact
 // copy and publication, so allow eight times the short critical-section budget.
+// Acquisition uses the operation queue budget: legitimate copies can exceed
+// the shared hold budget, and every actual holder has its own watchdog ticket.
 static SPAWN_MATERIALIZE_LOCK: RwLock<()> = RwLock::with_hold_limits(
     (),
     zccache_core::sync::STATE_TIMEOUT,
@@ -49,7 +51,7 @@ static SPAWN_MATERIALIZE_LOCK: RwLock<()> = RwLock::with_hold_limits(
 #[track_caller]
 fn spawn_shared() -> RwLockReadGuard<'static, ()> {
     SPAWN_MATERIALIZE_LOCK
-        .read_for(zccache_core::sync::STATE_TIMEOUT)
+        .read_for(zccache_core::sync::OPERATION_TIMEOUT)
         .unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -69,7 +71,7 @@ pub(crate) fn test_spawn_shared() -> RwLockReadGuard<'static, ()> {
 #[track_caller]
 pub(crate) fn materialize_exclusive() -> RwLockWriteGuard<'static, ()> {
     SPAWN_MATERIALIZE_LOCK
-        .write_for(zccache_core::sync::STATE_TIMEOUT)
+        .write_for(zccache_core::sync::OPERATION_TIMEOUT)
         .unwrap_or_else(PoisonError::into_inner)
 }
 

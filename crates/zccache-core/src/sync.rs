@@ -217,16 +217,9 @@ impl Gate {
 }
 
 pub(crate) fn synchronization_failed(site: &std::panic::Location<'_>, error: LockTimeout) -> ! {
-    use std::io::Write;
-    let _ = writeln!(
-        std::io::stderr(),
-        "bounded synchronization failed at {site}: {error}"
-    );
-    super::sync_watchdog::dump_context();
-    tracing::error!(%site, %error, "bounded synchronization failed");
     // Essential state is unavailable. End the service so its supervisor can
     // restart it; a detached task panic can otherwise leave a partial service.
-    std::process::abort()
+    super::sync_watchdog::acquisition_failed(site, error)
 }
 
 #[cfg(test)]

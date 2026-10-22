@@ -1495,3 +1495,12 @@ wrapper-type classification; it now rejects aliases, concrete wrapper fields,
 unit native guards, UFCS and function-item acquisition bypasses. All three
 existing UI fixtures and both dependency-bearing examples pass. Review,
 workspace Clippy and full clean-tree qualification are next.
+
+#1962 primary review found two HIGH issues; both have new focused RED -> GREEN
+regressions: unread/full stderr blocked termination, and real spawn/copy admission
+aborted after 15s during a legitimate 120s-budget copy. Diagnostic delivery now
+uses one bounded writer and at most 250ms before termination; real admission
+uses the operation queue budget, with unchanged 15s/120s hold limits. Twelve
+final watchdog tests, legitimate-copy regression, all five UI fixtures and
+workspace/all-target Clippy with cli+download-daemon features pass. Correction
+review is clean (one primary reviewer). Full clean-tree gate remains pending.

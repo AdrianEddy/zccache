@@ -94,18 +94,24 @@ The private `sync_watchdog` owner registers waiters and short critical-section
 holders with RAII tickets. `State` callbacks and native guards have a 15-second
 hold budget, independent of their acquisition argument. A dedicated OS thread
 checks every 100 milliseconds, so a blocked async executor cannot suppress the
-check. An overdue holder emits every registered holder/waiter site, owner
-identity, thread and nanosecond timing, then aborts. Overdue waiters are reported
-once without aborting: a queue behind legitimate work is not a broken holder.
+check. An overdue holder queues every registered holder/waiter site, owner
+identity, thread and nanosecond timing, then aborts after allowing at most 250 ms
+for diagnostic delivery. Overdue waiters are reported once without aborting:
+a queue behind legitimate work is not a broken holder.
 Acquisition expiry retains its existing recoverable or essential failure
 contract. Essential expiry also dumps the registry. Direct stderr writes bypass
-libtest print capture; diagnostics and formatting run outside the registry lock.
+libtest print capture. A separate process-lifetime writer and a one-entry queue
+keep blocked stderr or logging locks off the monitor/termination path. Reports
+are best effort when that bounded sink is unavailable; termination still runs.
+No tracing callback runs before abort. Formatting runs outside the registry lock.
 Cancellation, normal guard release, recovered poison and panic unwinding remove
 their tickets. Failure to start the watchdog aborts rather than silently disabling it.
 
 Spawn admission uses the same native owner: shared holds cover spawn only and
 have the 15-second limit; exclusive materialization includes copying and
-publication and gets 120 seconds. Native owners can select explicit justified
+publication and gets 120 seconds. Both admission entrypoints use the operation
+acquisition budget so legitimate copies and queues can outlive 15 seconds.
+Native owners can select explicit justified
 hold budgets at construction; changing an acquisition budget never changes a
 hold budget. `Gate`/`Barrier` operation permits have no protected data and are
 excluded from the short-holder watchdog. In particular, depgraph disk persistence

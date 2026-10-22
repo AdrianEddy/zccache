@@ -47,6 +47,26 @@ fn watchdog_terminates_wedged_materialization_holder() {
     );
 }
 
+#[test]
+fn legitimate_copy_can_outlive_short_budget_with_real_admission_waiters() {
+    let output = zccache_core::wait::output_for(
+        kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::spawn_exclusion::watchdog_tests::watchdog_child",
+            ])
+            .env("ZCCACHE_SPAWN_WATCHDOG_TEST_CASE", "legitimate-copy"),
+        zccache_core::sync::STATE_TIMEOUT + Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(
+        output.exit.raw_code(),
+        0,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn park_forever() -> ! {
     loop {
         std::thread::park();
@@ -59,6 +79,23 @@ fn watchdog_child() {
         return;
     };
     match case.as_str() {
+        "legitimate-copy" => {
+            let holder = materialize_exclusive();
+            let spawn = std::thread::spawn(|| {
+                let _permit = spawn_shared();
+            });
+            let copy = std::thread::spawn(|| {
+                let _permit = materialize_exclusive();
+            });
+            std::thread::sleep(zccache_core::sync::STATE_TIMEOUT + Duration::from_millis(500));
+            drop(holder);
+            zccache_core::wait::join_for(spawn, Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            zccache_core::wait::join_for(copy, Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+        }
         "spawn" => {
             let _holder = spawn_shared();
             std::thread::spawn(|| {
