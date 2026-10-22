@@ -6,3 +6,5 @@ fn main() {
     Other.remove_dir();
     Other.drain_for();
 }
+
+fn protected_data(guard: std::sync::MutexGuard<'_ , Vec<u8>>) -> usize { guard.len() }

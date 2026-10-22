@@ -1,0 +1,16 @@
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/auxiliary/server/persist/staged_plan.rs:10:17
+   |
+LL |         let _ = std::fs::remove_dir_all("shared-cache");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(ban_sweep_under_exclusion)]` on by default
+
+error: raw tree deletion belongs to a typed cleanup owner
+  --> $DIR/auxiliary/server/persist/staged_plan.rs:14:13
+   |
+LL |     let _ = std::fs::remove_dir_all("shared-cache");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

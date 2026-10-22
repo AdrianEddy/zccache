@@ -86,7 +86,18 @@ fn function<'tcx>(
             return BULK;
         }
         let Some(local) = definition.as_local() else {
-            return 0;
+            // Foreign callback combinators (Iterator::for_each, etc.) do not
+            // expose their MIR here. Their concrete local closure bodies do.
+            // Conservatively propagate those effects rather than treating the
+            // foreign function as a cleanup-free boundary.
+            return arguments
+                .types()
+                .fold(0, |effects, value| match value.kind() {
+                    ty::Closure(callback, arguments) => {
+                        effects | function(cx, *callback, arguments, seen)
+                    }
+                    _ => effects,
+                });
         };
         if !matches!(
             cx.tcx.def_kind(definition),

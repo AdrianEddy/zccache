@@ -5,9 +5,11 @@ extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
+mod cleanup_owners;
 mod detach_policy;
 mod effects;
 mod guard_analysis;
+mod guard_escapes;
 mod guard_initialization;
 mod guard_types;
 extern crate rustc_span;
@@ -56,6 +58,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         {
             return;
         }
+        guard_escapes::check(cx, expr);
         let definition = match expr.kind {
             ExprKind::Path(path) => match cx.qpath_res(&path, expr.hir_id) {
                 Res::Def(_, definition) => definition,
@@ -109,7 +112,7 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
             return;
         }
         // Even an approved owner may not export an erased raw function item.
-        if direct && approved_owner(cx, &filename) {
+        if direct && cleanup_owners::approved(cx, &filename) {
             return;
         }
         emit(
@@ -146,55 +149,6 @@ fn approved_drain_owner(cx: &LateContext<'_>, filename: &str) -> bool {
         && filename.ends_with("/server/wal.rs"))
         || (path == "zccache_daemon_core::daemon::server::embedded::flush_embedded_state"
             && filename.ends_with("/server/embedded.rs"))
-}
-
-fn approved_owner(cx: &LateContext<'_>, filename: &str) -> bool {
-    let Some(owner) = enclosing_function(cx) else {
-        return false;
-    };
-    let name = cx.tcx.item_name(owner);
-    let krate = cx.tcx.crate_name(owner.krate);
-    if krate.as_str() == "zccache_artifact" {
-        return filename.ends_with("crates/zccache-artifact/src/kv/retirement.rs")
-            && name.as_str() == "sweep_tree";
-    }
-    if krate.as_str() != "zccache_daemon_core" {
-        return false;
-    }
-    // Shared store owners. Empty trash unlink is a separate constant-depth
-    // native commit; junction removal never recursively follows its target.
-    if filename.ends_with("/persist/staged_store/trash.rs") {
-        return matches!(name.as_str(), "remove_tree" | "try_remove_empty_trash");
-    }
-    if filename.ends_with("/persist/staged_store/root_safety.rs") {
-        return name.as_str() == "remove_staged_link_or_reparse";
-    }
-    // Existing owners of private compiler output, materialization targets,
-    // and lifecycle debris. These never own shared staged generations.
-    const PRIVATE: &[(&str, &[&str])] = &[
-        (
-            "/server/staging_root.rs",
-            &["cleanup_abandoned_older_than", "drop"],
-        ),
-        ("/server/handle_exec.rs", &["build", "cleanup"]),
-        (
-            "/persist/staged_plan.rs",
-            &["rustc", "cc", "archive", "link", "cleanup"],
-        ),
-        (
-            "/persist/staged_multi.rs",
-            &["build_with_depfile_flag", "cleanup"],
-        ),
-        (
-            "/persist/directory_bundle.rs",
-            &["remove_directory_if_present"],
-        ),
-        ("/server/run.rs", &["run"]),
-        ("/server/embedded.rs", &["shutdown"]),
-    ];
-    PRIVATE
-        .iter()
-        .any(|(file, functions)| filename.ends_with(file) && functions.contains(&name.as_str()))
 }
 
 fn filename(cx: &LateContext<'_>, span: Span) -> String {

@@ -1977,3 +1977,25 @@ Remaining enforcement work before #1964 can ship:
   (/tmp/zccache-1964-shallow-workspace.log). This is default Linux evidence only;
   pending guard-escape/callback/async coverage, supported OS/features, final docs,
   clippy, review/full gate, PR merge and main rebase remain required.
+
+### #1964 guard escape, callback, and exact cleanup ownership (2026-10-22)
+
+- Added deny-level semantic checks for guard-typed mem::forget (including function
+  items), ManuallyDrop/MaybeUninit construction, Box leak/raw conversion,
+  transmute, and ownership-erasing unsizing/casts. Ordinary dereference access
+  remains permitted; non-owning Weak/PhantomData can still be forgotten.
+- Correct RED escape evidence is guard-escapes-red-valid.log: the initial attempt
+  failed dependency compilation on rustc's undropped_manually_drops rule, so that
+  first log is not policy RED evidence. The fixture explicitly allows that
+  unrelated rustc rule to test this lint's leak prevention.
+- Foreign combinators propagate concrete local closure effects. Iterator::for_each
+  previously hid a typed trash sweep (iterator-sweep-red.log), and now rejects
+  it while allowing a read callback under a reader lease.
+- Cleanup permission now matches exact free-function identities or the actual
+  impl receiver DefId plus method and source file. Impostor::cleanup and a free
+  cleanup in staged_plan.rs previously passed (cleanup-owner-red.log); both now
+  fail while StagedCompilePlan::cleanup passes in the same fixture.
+- All 25 fixtures pass (/tmp/zccache-1964-owner-escape-final.log). Production
+  workspace lib/bin Dylint is green with these checks
+  (/tmp/zccache-1964-owner-escape-workspace.log). Other pending acceptance gates
+  above still apply. New drop_sweep RED fixture is separate uncommitted work.

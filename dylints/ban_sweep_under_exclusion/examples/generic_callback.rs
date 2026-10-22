@@ -9,4 +9,10 @@ fn read(permit: PublicationReadPermit) {
     });
     drop(permit);
 }
+fn iterator_read(permit: PublicationReadPermit) {
+    std::iter::once("cache").for_each(|path| {
+        let _ = std::fs::read(path);
+    });
+    drop(permit);
+}
 fn main() {}
