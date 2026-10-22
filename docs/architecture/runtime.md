@@ -170,6 +170,14 @@ completion. The lease carries filesystem ownership across waits and cleanup;
 its destruction releases the claim without recursively dropping cache state.
 The wait budget does not interrupt an individual filesystem syscall.
 
+Clear and disk-maintenance sweep workers also retain their own root lease,
+independent of the request future and `Arc<SharedState>`. Explicit daemon release
+cannot admit another native writer while these workers are paused in cleanup.
+Maintenance separately retains a completion lease through its full-pass marker.
+These worker leases do not establish ownership for a WAL command whose disk write
+continues after its acknowledgement waiter is cancelled or times out; that write
+must retain its own root ownership through actual completion.
+
 ### Soldr fixes audited (2026-09-01 through 2026-10-21)
 
 | PR | Status | Relevance here |

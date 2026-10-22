@@ -133,6 +133,19 @@ async fn cancelled_maintenance_owns_cleanup_after_releasing_publication() {
                 .is_cancelled()
         );
         let cleanup_is_owned = server.state.disk_maintenance.try_acquire().is_err();
+        server.state.cache_root_lock.release();
+        let root = cache_dir.as_path().to_path_buf();
+        let root_is_owned = tokio::task::spawn_blocking(move || {
+            match crate::core::cache_root_lock::CacheRootWriterLock::acquire(&root) {
+                Err(error) => error.kind() == std::io::ErrorKind::WouldBlock,
+                Ok(contender) => {
+                    drop(contender);
+                    false
+                }
+            }
+        })
+        .await
+        .unwrap();
         hook.resume();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let trash = server.state.artifact_dir.join(".staged-v2/.trash");
@@ -155,6 +168,10 @@ async fn cancelled_maintenance_owns_cleanup_after_releasing_publication() {
         assert!(
             publication_is_released,
             "maintenance retained the global writer while sweeping"
+        );
+        assert!(
+            root_is_owned,
+            "explicit daemon release let a new native writer enter during owned cleanup"
         );
         assert!(
             cleanup_is_owned,

@@ -142,6 +142,19 @@ async fn cancelled_clear_keeps_its_worker_owned_until_cleanup_finishes() {
         );
         let cleanup_is_owned = server.state.disk_maintenance.try_acquire().is_err();
         let publication_is_released = server.state.artifact_publication.try_read_owned().is_ok();
+        server.state.cache_root_lock.release();
+        let root = cache_dir.as_path().to_path_buf();
+        let root_is_owned = tokio::task::spawn_blocking(move || {
+            match crate::core::cache_root_lock::CacheRootWriterLock::acquire(&root) {
+                Err(error) => error.kind() == std::io::ErrorKind::WouldBlock,
+                Ok(contender) => {
+                    drop(contender);
+                    false
+                }
+            }
+        })
+        .await
+        .unwrap();
         hook.resume();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while server.state.disk_maintenance.try_acquire().is_err() {
@@ -156,6 +169,10 @@ async fn cancelled_clear_keeps_its_worker_owned_until_cleanup_finishes() {
             .await
             .expect("index writer must drain after shutdown")
             .unwrap();
+        assert!(
+            root_is_owned,
+            "explicit daemon release let a new native writer enter during owned cleanup"
+        );
         assert!(
             cleanup_is_owned,
             "cancelling Clear released its maintenance permit before the blocking worker finished"

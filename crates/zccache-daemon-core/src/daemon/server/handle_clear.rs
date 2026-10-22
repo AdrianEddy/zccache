@@ -8,12 +8,22 @@ pub(super) async fn handle_clear(state: &Arc<SharedState>) -> Response {
             message: "pending artifact writes did not drain before Clear".into(),
         };
     }
+    let Some(root) = state.cache_root_lock.lease_for(STATE_TIMEOUT) else {
+        return Response::Error {
+            message: "Clear skipped because cache-root ownership was released".into(),
+        };
+    };
     let worker_state = Arc::clone(state);
     match state
         .launch_blocking(move || {
-            // This permit stays with the transaction even if the requester cancels.
+            // Capture the root last so queued cancellation drops it last.
+            let _ = &worker_state;
+            let _ = &maintenance;
+            // On execution/unwind, retain native ownership through the worker state handle drop.
+            let _root = root;
+            let state = worker_state;
             let _maintenance = maintenance;
-            clear_on_blocking_lane(&worker_state, crate::core::wait::PROBE)
+            clear_on_blocking_lane(&state, crate::core::wait::PROBE)
         })
         .await
     {

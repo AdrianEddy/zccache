@@ -15,35 +15,56 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
             "disk maintenance skipped because daemon shutdown is in progress",
         ));
     }
+    let root_released = || {
+        io::Error::new(
+            io::ErrorKind::Interrupted,
+            "disk maintenance skipped because cache-root ownership was released",
+        )
+    };
+    // The async owner covers the completion marker; the worker's separate
+    // lease covers cleanup even if this future is cancelled.
+    let _completion_root = state
+        .cache_root_lock
+        .lease_for(STATE_TIMEOUT)
+        .ok_or_else(root_released)?;
+    let worker_root = state
+        .cache_root_lock
+        .lease_for(STATE_TIMEOUT)
+        .ok_or_else(root_released)?;
     let cache_dir = state.cache_dir.clone();
     let index_writer_tx = state.index_writer_tx.clone();
     let maintenance_index_writer_tx = index_writer_tx.clone();
     let pending_write_bytes = state.in_flight_bytes.load(Ordering::Relaxed) as u64;
     let maintenance_state = Arc::clone(&state);
     let (result, _maintenance_guard) = launch_maintenance_blocking(runtime_handle, move || {
+        // Capture the root after owners that may touch disk on destruction.
+        let _ = &maintenance_state;
+        let _ = &maintenance_guard;
+        let _root = worker_root;
+        let worker_state = maintenance_state;
         let result = (|| {
-            let dep_graph = maintenance_state.dep_graph.load_full();
+            let dep_graph = worker_state.dep_graph.load_full();
             let mut report = maintain_disk_artifacts_with_barrier(
                 MaintenancePass {
-                    artifact_dir: maintenance_state.artifact_dir.as_path(),
-                    artifacts: &maintenance_state.artifacts,
-                    artifact_store: &maintenance_state.artifact_store,
+                    artifact_dir: worker_state.artifact_dir.as_path(),
+                    artifacts: &worker_state.artifacts,
+                    artifact_store: &worker_state.artifact_store,
                     index_writer_tx: Some(&maintenance_index_writer_tx),
                     dep_graph: &dep_graph,
                     pending_write_bytes,
                     policy,
                     kind,
                     environment: &RealMaintenanceEnvironment,
-                    retired_top_level: versioned_top_level(maintenance_state.cache_dir.as_path()),
+                    retired_top_level: versioned_top_level(worker_state.cache_dir.as_path()),
                 },
-                Some(&maintenance_state.artifact_publication),
-                Some(&maintenance_state.shutdown_requested),
+                Some(&worker_state.artifact_publication),
+                Some(&worker_state.shutdown_requested),
             )?;
             report.bytes_reclaimed =
                 report
                     .bytes_reclaimed
                     .saturating_add(recover_retired_exec_for(
-                        &maintenance_state.exec_store,
+                        &worker_state.exec_store,
                         crate::core::wait::PROBE,
                     ));
             Ok::<_, io::Error>(report)
