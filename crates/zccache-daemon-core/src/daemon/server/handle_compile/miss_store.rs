@@ -419,9 +419,12 @@ fn store_rustc_outputs(
                 .await
                 .expect("persist_semaphore is owned by ServerState and never closed");
             let published = kernal_api::async_engine::launch_blocking(move || {
-                let _publication_guard = publication_guard;
+                // Cancellation releases the first capture; execution releases
+                // the last local before staged-plan cleanup can remove a tree.
+                let _ = &publication_guard;
                 let _resource_admission = resource_admission;
                 let _staged_plan = plan_for_publish;
+                let _publication_guard = publication_guard;
                 let snapshot =
                     persist_artifact_paths_with_stats(&artifact_dir, &key_hex, &source_paths, materialization_mode)?;
                 commit_rustc_artifact_index(

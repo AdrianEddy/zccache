@@ -84,12 +84,16 @@ fn function<'tcx>(
             return SWEEP;
         }
         if matches!(krate.as_str(), "std" | "tokio")
+            && cx.tcx.def_kind(definition) == rustc_hir::def::DefKind::Fn
+            && path.iter().any(|part| part.as_str() == "fs")
+            && name == "remove_dir_all"
+        {
+            return SWEEP;
+        }
+        if matches!(krate.as_str(), "std" | "tokio")
             && (cx.tcx.def_kind(definition) == rustc_hir::def::DefKind::Fn
                 && path.iter().any(|part| part.as_str() == "fs")
-                && matches!(
-                    name,
-                    "read_dir" | "read" | "write" | "copy" | "remove_dir_all"
-                )
+                && matches!(name, "read_dir" | "read" | "write" | "copy")
                 || matches!(
                     name,
                     "read_to_end" | "read_to_string" | "write_all" | "sync_all" | "sync_data"

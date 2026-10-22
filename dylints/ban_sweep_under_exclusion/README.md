@@ -5,6 +5,9 @@ Work in progress for #1964; not yet ready for the final workspace gate.
 The lint resolves raw tree deletion DefIds and confines them to explicit sweep,
 link-removal and private staging/lifecycle owners. Function-item capture is
 rejected even in approved owners to prevent exporting a raw capability.
+Raw recursive deletion has sweep effects even inside approved private cleanup
+owners. Publication readers and materialization exclusion permit bulk copying;
+recursive deletion is forbidden while either remains held.
 
 Guard analysis uses compiler move initialization, guard field paths and actual
 control-flow edges, with enum variant refinement. The compiler fixtures cover
