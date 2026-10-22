@@ -24,6 +24,7 @@ async fn compiler_output_has_exactly_one_capture_owner() {
                 &mut stderr_bytes,
                 &mut stdout,
                 &mut stderr,
+                std::time::Duration::from_millis(50),
             )
             .await;
             assert!(matches!(result, CompilerSessionEvent::Progress));
@@ -44,6 +45,40 @@ async fn compiler_output_has_exactly_one_capture_owner() {
     }
 }
 
+#[tokio::test]
+async fn compiler_output_live_consumer_backpressure_expires() {
+    use kernal_api::{ProcessOutputChunk, ProcessOutputEvent};
+    let (sender, _receiver) = kernal_api::async_engine::channel(1);
+    sender
+        .send(crate::daemon::compile_output::RawOutputChunk::Stdout(vec![
+            0,
+        ]))
+        .await
+        .unwrap();
+    let mut stdout_bytes = 0;
+    let mut stderr_bytes = 0;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        forward_compiler_session_event(
+            ProcessOutputEvent::Chunk(ProcessOutputChunk::Stdout(vec![1])),
+            &Some(sender),
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut stdout,
+            &mut stderr,
+            std::time::Duration::from_millis(50),
+        ),
+    )
+    .await
+    .expect("a live blocked consumer must not suspend process monitoring");
+    let CompilerSessionEvent::ConsumerDisconnected(error) = result else {
+        panic!("backpressure must return an actionable process failure");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn semantic_compiler_early_stdin_close_preserves_diagnostics() {
@@ -58,6 +93,7 @@ async fn semantic_compiler_early_stdin_close_preserves_diagnostics() {
             Some(&input),
             None,
             "early stdin close fixture".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         ),
     )
     .await
@@ -88,7 +124,7 @@ async fn semantic_termination_returns_a_reaped_child_status() {
     .await
     .expect("fixture startup deadline")
     .expect("fixture starts");
-    let status = super::session::terminate_session(&session)
+    let status = super::session::terminate_session(&session, std::time::Duration::from_secs(5))
         .await
         .expect("termination confirms reaping");
     assert!(!status.success());
@@ -180,7 +216,8 @@ fn canonical_spawn_waits_for_materialization_to_release() {
                 async_builder_output_with_priority_and_post_exit_grace(
                     builder,
                     CompilePriority::Normal,
-                    None,
+                    std::time::Duration::from_secs(2),
+                    crate::daemon::process::ProcessLiveness::configured(),
                 ),
             )
             .await
@@ -237,6 +274,7 @@ async fn semantic_compiler_drains_output_while_feeding_large_stdin() {
             Some(&input),
             None,
             "duplex compiler fixture".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         ),
     )
     .await
@@ -260,6 +298,7 @@ async fn semantic_discovery_timeout_preserves_output_and_nonzero_status() {
         CompilePriority::Normal,
         std::time::Duration::from_secs(10),
         "discovery contract fixture".to_string(),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
     .expect("nonzero discovery exit is still a captured result");
@@ -279,6 +318,7 @@ async fn semantic_discovery_deadline_returns_timed_out() {
             CompilePriority::Normal,
             std::time::Duration::from_millis(100),
             "discovery deadline fixture".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         ),
     )
     .await
@@ -302,6 +342,7 @@ async fn compiler_session_records_child_peak_rss_into_the_compile_scope() {
                 builder,
                 CompilePriority::Normal,
                 "peak-rss fixture".to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             )
             .await
             .0
@@ -329,6 +370,7 @@ async fn compiler_session_records_a_tree_peak_that_covers_a_heavy_descendant() {
                 builder,
                 CompilePriority::Normal,
                 "heavy-tree fixture".to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             )
             .await
             .0

@@ -65,7 +65,13 @@ pub(super) async fn run_tool_passthrough(
     builder = apply_client_env_builder(builder, &env, lineage, false);
 
     let priority = CompilePriority::from_client_env(env.as_deref());
-    match super::super::process::async_builder_output_with_priority(builder, priority).await {
+    match super::super::process::async_builder_output_with_priority(
+        builder,
+        priority,
+        crate::daemon::process::ProcessLiveness::configured(),
+    )
+    .await
+    {
         Ok(output) => Response::LinkResult {
             exit_code: output.status.code().unwrap_or(1),
             stdout: Arc::new(output.stdout),
@@ -79,11 +85,9 @@ pub(super) async fn run_tool_passthrough(
     }
 }
 
-/// Run a parsed pure archiver without the general compiler-child watchdog.
-///
-/// Archivers are leaf processes: they only read declared inputs and write the
-/// requested archive. Waiting on the Tokio child directly avoids watchdog and
-/// blocking-pool setup costs that are material for a 10-20 ms `ar` run.
+/// Run a parsed pure archiver through the canonical finite process owner.
+/// Archive, compiler and generic tool sessions share progress monitoring,
+/// concurrent pipe drains and native child containment.
 pub(super) async fn run_archive_tool_passthrough(
     tool: &Path,
     args: &[String],
@@ -101,7 +105,10 @@ pub(super) async fn run_archive_tool_passthrough(
     );
     let priority = CompilePriority::from_client_env(env.as_deref());
     match super::super::process::async_builder_output_with_priority_and_post_exit_grace(
-        builder, priority, None,
+        builder,
+        priority,
+        std::time::Duration::from_secs(2),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
     {
@@ -158,7 +165,13 @@ pub(super) async fn run_post_link_deploy_hook(
     );
 
     let priority = CompilePriority::from_client_env(env);
-    match super::super::process::async_builder_output_with_priority(builder, priority).await {
+    match super::super::process::async_builder_output_with_priority(
+        builder,
+        priority,
+        crate::daemon::process::ProcessLiveness::configured(),
+    )
+    .await
+    {
         Ok(out) if out.status.success() => {
             tracing::debug!(program = %program, "post-link deploy hook succeeded");
         }

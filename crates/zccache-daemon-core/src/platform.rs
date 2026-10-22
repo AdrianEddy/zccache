@@ -212,7 +212,6 @@ pub(crate) mod process {
                 .is_ok_and(|handle| handle.is_alive())
         }
 
-        #[cfg(test)]
         pub(crate) fn cpu_ticks(pid: u32) -> Option<u64> {
             kernal_api::platform::process::cpu_ticks_for_pid(pid)
         }

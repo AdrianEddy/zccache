@@ -40,7 +40,8 @@ fn daemon_owned_child_dies_when_helper_owner_is_killed() {
         let result = runtime.block_on(async_builder_output_with_priority_and_post_exit_grace(
             builder,
             CompilePriority::Normal,
-            None,
+            std::time::Duration::from_secs(2),
+            crate::daemon::process::ProcessLiveness::configured(),
         ));
         panic!("owner-death test child returned before its owner was killed: {result:?}");
     }
@@ -564,6 +565,7 @@ async fn session_spawn_errors_preserve_native_io_category() {
     let error = async_builder_output_with_priority(
         kernal_api::SpawnSpec::new("zccache-missing-session-program-fixture"),
         CompilePriority::Normal,
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await
     .expect_err("a missing program must not spawn");
@@ -635,6 +637,7 @@ fn semantic_session_start_future_is_send_without_a_caller_held_lock() {
     assert_send(async_builder_output_with_priority(
         kernal_api::SpawnSpec::new("zccache-session-send-fixture"),
         CompilePriority::Normal,
+        crate::daemon::process::ProcessLiveness::configured(),
     ));
 }
 
@@ -675,6 +678,7 @@ async fn semantic_streaming_session_forwards_chunks_without_duplicate_capture() 
         CompilePriority::Normal,
         sender,
         "streaming-fixture".to_owned(),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await;
     let output = output.expect("streaming fixture must succeed");
@@ -703,6 +707,7 @@ async fn semantic_compiler_capture_uses_the_same_session_watchdog_loop() {
         builder,
         CompilePriority::Normal,
         "captured-compiler-fixture".to_owned(),
+        crate::daemon::process::ProcessLiveness::configured(),
     )
     .await;
     let output = output.expect("captured compiler fixture must succeed");
@@ -757,6 +762,7 @@ async fn semantic_compiler_consumer_disconnect_remains_a_kill_reap_failure() {
         &mut stderr_bytes,
         &mut stdout,
         &mut stderr,
+        std::time::Duration::from_millis(50),
     )
     .await;
     let CompilerSessionEvent::ConsumerDisconnected(error) = outcome else {

@@ -434,6 +434,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
             compiler_priority,
             sender,
             compiler.display().to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         );
         let consume = crate::daemon::compile_output::consume(receiver, context, filter);
         let (process_result, capture_result) = tokio::join!(process, consume);
@@ -444,6 +445,7 @@ pub(super) async fn run_compile_exec(req: CompileExecRequest<'_>) -> CompileExec
                 builder,
                 compiler_priority,
                 compiler.display().to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             )
             .await;
         (result, decision, None)

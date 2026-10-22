@@ -586,6 +586,7 @@ mod tests {
             None,
             Some(raw_sender),
             "streaming fixture".to_string(),
+            crate::daemon::process::ProcessLiveness::configured(),
         );
         let consume = super::consume(raw_receiver, context, OutputFilter::None);
         let operation = async {
@@ -633,6 +634,7 @@ mod tests {
                 None,
                 Some(raw_sender),
                 "stream cancellation fixture".to_string(),
+                crate::daemon::process::ProcessLiveness::configured(),
             );
             let consume = super::consume(raw_receiver, context, OutputFilter::None);
             tokio::join!(process, consume)

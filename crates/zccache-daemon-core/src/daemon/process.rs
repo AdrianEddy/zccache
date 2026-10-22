@@ -518,6 +518,10 @@ pub(crate) struct CompilePriorityParseError {
 #[path = "process_session.rs"]
 mod session;
 
+#[path = "process_policy.rs"]
+mod policy;
+pub(crate) use policy::ProcessLiveness;
+
 pub(crate) use session::{
     async_builder_output_streaming_with_priority_decision, async_builder_output_with_priority,
     async_builder_output_with_priority_and_post_exit_grace,
@@ -532,4 +536,8 @@ mod tests;
 #[cfg(test)]
 #[path = "process_session_tests.rs"]
 mod session_tests;
+
+#[cfg(test)]
+#[path = "process_liveness_tests.rs"]
+mod liveness_tests;
 // test inside `cargo test` because the test runner's own stdio
