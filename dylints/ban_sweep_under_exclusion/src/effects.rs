@@ -189,34 +189,54 @@ pub(super) fn drop_value<'tcx>(
     active.push(value);
     let effects = match value.kind() {
         ty::Adt(definition, arguments) => {
-            if super::guard_types::direct(cx, definition.did()).is_some() {
+            let name = cx.tcx.item_name(definition.did());
+            let standard = matches!(
+                cx.tcx.crate_name(definition.did().krate).as_str(),
+                "core" | "std" | "alloc"
+            );
+            if super::guard_types::direct(cx, definition.did()).is_some()
+                || standard && name.as_str() == "ManuallyDrop"
+            {
                 0
+            } else if standard && name.as_str() == "Weak" {
+                // Weak drops its allocator, never the strong owner's value.
+                arguments.types().skip(1).fold(0, |effects, field| {
+                    effects | drop_value(cx, field, summaries, active)
+                })
             } else {
                 let own = definition
                     .destructor(cx.tcx)
                     .filter(|drop| drop.did.is_local())
                     .map_or(0, |drop| function(cx, drop.did, arguments, summaries));
-                let fields = if definition.did().is_local() {
-                    definition.all_fields().fold(0, |effects, field| {
-                        effects
-                            | drop_value(
-                                cx,
-                                field.ty(cx.tcx, arguments).skip_norm_wip(),
-                                summaries,
-                                active,
-                            )
-                    })
-                } else {
-                    arguments.types().fold(0, |effects, field| {
-                        effects | drop_value(cx, field, summaries, active)
-                    })
-                };
+                let fields =
+                    if definition.did().is_local() || definition.destructor(cx.tcx).is_none() {
+                        definition.all_fields().fold(0, |effects, field| {
+                            effects
+                                | drop_value(
+                                    cx,
+                                    field.ty(cx.tcx, arguments).skip_norm_wip(),
+                                    summaries,
+                                    active,
+                                )
+                        })
+                    } else {
+                        arguments.types().fold(0, |effects, field| {
+                            effects | drop_value(cx, field, summaries, active)
+                        })
+                    };
                 own | fields
             }
         }
         ty::Tuple(fields) => fields.iter().fold(0, |effects, field| {
             effects | drop_value(cx, field, summaries, active)
         }),
+        ty::Closure(_, arguments) => arguments
+            .as_closure()
+            .upvar_tys()
+            .iter()
+            .fold(0, |effects, field| {
+                effects | drop_value(cx, field, summaries, active)
+            }),
         ty::Array(field, _) | ty::Slice(field) => drop_value(cx, *field, summaries, active),
         ty::Dynamic(..) | ty::Param(..) => UNKNOWN,
         _ => 0,

@@ -2024,3 +2024,32 @@ Remaining enforcement work before #1964 can ship:
   without invoking the closure; async/native sweep execution and consumed-MIR
   behavior; typed transfer/release boundaries. Then complete OS/features/planted
   violations, docs, clippy, review/full gate, PR and main cleanup before #1965.
+
+### #1964 passive/captured drop ownership and closed lease sources (2026-10-22)
+
+- RED: passive_drop treated Weak, PhantomData, ManuallyDrop and MaybeUninit as
+  dropping their generic cleanup value (/tmp/zccache-1964-passive-drop-red.log).
+  Drop analysis now follows actual fields for types without destructors, treats
+  ManuallyDrop as non-dropping, and drops only Weak's allocator rather than T.
+  Foreign owning destructors still conservatively include their generic values.
+  Owning Arc<Cleanup> remains a denied sweep under a reader permit.
+- RED: dropping an uninvoked closure with an owned Cleanup capture bypassed
+  analysis (captured-drop-red.log). Drop effects now include closure upvars.
+  Held-reader capture cleanup is denied; cleanup after release is accepted.
+- All 28 fixtures pass (/tmp/zccache-1964-passive-captured-final.log).
+- Production resolver now uses a closed Source enum (state-backed or cfg(test)
+  direct acquisition), replacing owned generic factory closures. The existing
+  bounded native acquisition owners and payload lifetimes are preserved; there
+  is no arbitrary factory destructor while returning a retained reader lease.
+  Moved resolution to cached_artifact_resolution.rs to keep source below 1K LOC.
+- All 97 staged-store regressions passed after the resolver change
+  (/tmp/zccache-1964-closed-lease-runtime.log). Latest production evidence with
+  passive fixes is still RED (passive-drop-workspace.log); opaque/generic drop
+  resolution and actual provisional-owner cleanup under commits remain pending.
+- New private-plan cleanup hook/regression and bosn task are separate uncommitted
+  work. Initial broad run failed an existing one-second publication observation
+  before reaching the new test. First focused run blocked because the test itself
+  accessed a shard still held by paused Clear; cancelled exact bosn job 522 and
+  verified its managed container had no test process remaining. The corrected
+  regression inspects the map only when it can acquire publication ownership.
+  Only its subsequent assertion-based RED should count as bug evidence.

@@ -24,4 +24,8 @@ fn released(permit: PublicationReadPermit, cleanup: Cleanup) {
     drop(permit);
     drop(cleanup);
 }
+fn owned_arc(permit: PublicationReadPermit, cleanup: std::sync::Arc<Cleanup>) {
+    drop(cleanup);
+    drop(permit);
+}
 fn main() {}

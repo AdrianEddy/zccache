@@ -12,5 +12,11 @@ error: slow filesystem work retains publication or store exclusion
 LL |     }
    |     ^
 
-error: aborting due to 2 previous errors
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/drop_sweep.rs:28:5
+   |
+LL |     drop(cleanup);
+   |     ^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors
 
