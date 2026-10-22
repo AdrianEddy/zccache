@@ -109,3 +109,7 @@ pub(crate) fn await_publishable(path: &std::path::Path) {
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "spawn_exclusion_watchdog_tests.rs"]
+mod watchdog_tests;

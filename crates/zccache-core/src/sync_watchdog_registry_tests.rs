@@ -56,3 +56,27 @@ fn native_guards_and_recovered_poison_unregister_on_drop() {
     drop(poison.into_inner());
     assert_eq!(registered(&lock), 0);
 }
+
+#[test]
+fn poisoned_reader_and_writer_guards_remain_registered_until_release() {
+    let lock = crate::blocking_sync::RwLock::new(0);
+    let _ = std::panic::catch_unwind(|| {
+        let _held = lock.write_for(Duration::from_secs(1)).unwrap();
+        panic!("poison writer state");
+    });
+    assert_eq!(registered(&lock), 0);
+    let reader = lock
+        .read_for(Duration::from_secs(1))
+        .unwrap_err()
+        .into_inner();
+    assert_eq!(registered(&lock), 1);
+    drop(reader);
+    assert_eq!(registered(&lock), 0);
+    let writer = lock.try_write().unwrap_err();
+    let std::sync::TryLockError::Poisoned(poison) = writer else {
+        panic!("poison was hidden");
+    };
+    assert_eq!(registered(&lock), 1);
+    drop(poison.into_inner());
+    assert_eq!(registered(&lock), 0);
+}

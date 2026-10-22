@@ -142,6 +142,14 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib gate_perm
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib watchdog --locked"
 
+[task.spawn-watchdog-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib spawn_exclusion::watchdog_tests --locked"
+
+[task.lock-watchdog-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib maintenance_schedule --locked"
+
 [task.bounded-gate-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib sync::tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_staged_materialization_leases_share_the_store_lock --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib tests::link_cache --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_store_wait_does_not_hold_state_mutex --locked"

@@ -305,7 +305,11 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
 /// critical-section watchdog must not bound.
 fn span_is_in_scope(cx: &LateContext<'_>, span: rustc_span::Span) -> bool {
     let filename = source_filename(cx, span).replace('\\', "/");
-    let is_ui_fixture = filename.starts_with("ui/") || filename.contains("/ui/");
+    // Dependency-bearing UI examples are copied to a temporary directory by
+    // dylint_testing. Compiler UI mode must still exercise every deny rule.
+    let is_ui_fixture = cx.sess().opts.unstable_opts.ui_testing
+        || filename.starts_with("ui/")
+        || filename.contains("/ui/");
     if is_ui_fixture {
         return true;
     }
@@ -397,6 +401,10 @@ fn contains_data_guard<'tcx>(
         };
         let krate = cx.tcx.crate_name(adt.did().krate);
         let guard = match krate.as_str() {
+            "zccache_core" => {
+                path.iter().any(|part| part.as_str() == "blocking_sync")
+                    && matches!(name, "MutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard")
+            }
             "std" | "lock_api" => matches!(
                 name,
                 "MutexGuard" | "MappedMutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard"
@@ -443,4 +451,7 @@ mod ui_test_support {
 #[test]
 fn ui() {
     ui_test_support::run(env!("CARGO_PKG_NAME"), env!("CARGO_MANIFEST_DIR"));
+    let _directory =
+        ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+    dylint_testing::ui_test_examples(env!("CARGO_PKG_NAME"));
 }

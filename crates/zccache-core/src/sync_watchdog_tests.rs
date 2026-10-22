@@ -39,6 +39,27 @@ fn watchdog_terminates_native_guard_holder() {
     assert_holder_is_terminated("native");
 }
 
+#[test]
+fn essential_acquisition_expiry_dumps_holder_and_waiter_despite_capture() {
+    let output = crate::wait::output_for(
+        kernal_api::SpawnSpec::new(std::env::current_exe().unwrap())
+            .args(["--exact", "sync::watchdog_tests::watchdog_child"])
+            .env("ZCCACHE_WATCHDOG_TEST_CASE", "acquisition"),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_ne!(output.exit.raw_code(), 0);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "bounded synchronization failed",
+        "Holding",
+        "Waiting",
+        "sync_watchdog_tests.rs",
+    ] {
+        assert!(stderr.contains(expected), "missing {expected}: {stderr}");
+    }
+}
+
 #[tokio::test]
 async fn cancelled_state_waiters_unregister_without_releasing_another_owner() {
     use std::future::Future;
@@ -89,6 +110,12 @@ fn watchdog_child() {
     let Ok(case) = std::env::var("ZCCACHE_WATCHDOG_TEST_CASE") else {
         return;
     };
+    if case == "acquisition" {
+        let lock = crate::blocking_sync::Mutex::with_hold_limit(0, Duration::from_secs(60));
+        let _holder = lock.lock_for(Duration::from_secs(1)).unwrap();
+        let _waiter = lock.lock_for(Duration::from_millis(1)).unwrap();
+        unreachable!("the second acquisition cannot complete");
+    }
     if case == "operation" {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

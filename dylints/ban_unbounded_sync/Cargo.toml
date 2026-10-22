@@ -13,6 +13,7 @@ dylint_linting = "=6.0.3"
 
 [dev-dependencies]
 dylint_testing = "=6.0.3"
+zccache-core = { path = "../../crates/zccache-core" }
 
 [package.metadata.rust-analyzer]
 rustc_private = true
