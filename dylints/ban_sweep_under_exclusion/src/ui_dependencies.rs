@@ -1,6 +1,6 @@
 //! Build real facade inputs through soldr with an explicit finite budget.
 use std::time::Duration;
-pub(super) fn core_flags(bound: Duration) -> Vec<String> {
+pub(super) fn dependency_flags(bound: Duration) -> Vec<String> {
     let toolchain = std::env::var("RUSTUP_TOOLCHAIN").expect("explicit UI toolchain");
     let mut spec = zccache_core::wait::CommandSpec::new("soldr")
         .clear_env(true)
@@ -27,27 +27,31 @@ pub(super) fn core_flags(bound: Duration) -> Vec<String> {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let artifact = String::from_utf8_lossy(&output.stdout)
+    let messages: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find_map(|message| {
-            if message["reason"] != "compiler-artifact"
-                || message["target"]["name"] != "zccache_core"
-            {
-                return None;
-            }
-            message["filenames"]
-                .as_array()?
-                .iter()
-                .filter_map(|value| value.as_str())
-                .find(|name| name.ends_with(".rlib"))
-                .map(str::to_owned)
-        })
-        .expect("Cargo JSON must identify the real core artifact");
-    let artifact = std::path::Path::new(&artifact);
-    vec![
-        "--edition=2021".into(),
-        format!("-Ldependency={}", artifact.parent().unwrap().display()),
-        format!("--extern=zccache_core={}", artifact.display()),
-    ]
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let mut flags = vec!["--edition=2021".into()];
+    for name in ["zccache_core", "zccache_artifact"] {
+        let artifact = messages
+            .iter()
+            .find_map(|message| {
+                if message["reason"] != "compiler-artifact" || message["target"]["name"] != name {
+                    return None;
+                }
+                message["filenames"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .find(|name| name.ends_with(".rlib"))
+            })
+            .expect("Cargo JSON must identify the real facade artifact");
+        let artifact = std::path::Path::new(artifact);
+        flags.push(format!(
+            "-Ldependency={}",
+            artifact.parent().unwrap().display()
+        ));
+        flags.push(format!("--extern={name}={}", artifact.display()));
+    }
+    flags
 }

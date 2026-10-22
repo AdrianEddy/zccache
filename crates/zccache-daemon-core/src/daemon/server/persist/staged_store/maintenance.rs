@@ -1,8 +1,8 @@
 //! Disk-budget scanning and eviction for staged v2 artifact generations.
 
 use super::{
-    is_staged_link_or_reparse, open_store_lock, pointer_path, staged_key_supported, staged_root,
-    validate_staged_artifact_root, STORE_LOCK,
+    is_staged_link_or_reparse, pointer_path, staged_key_supported, staged_root,
+    validate_staged_artifact_root, StagedCommitGuard, STORE_LOCK,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -121,9 +121,7 @@ pub(crate) fn evict_staged_artifact_keys(
     if !validate_staged_artifact_root(artifact_dir)? {
         return Ok(0);
     }
-    let store_lock = open_store_lock(&root)?;
-    let _store_lock_guard =
-        crate::core::wait::lock_exclusive_for(&store_lock, crate::core::wait::PROBE)?;
+    let _store_lock_guard = StagedCommitGuard::acquire_for(artifact_dir, crate::core::wait::PROBE)?;
     let mut detached = super::trash::DetachedStagedTrash::empty(artifact_dir);
     for key in keys.iter().filter(|key| staged_key_supported(key)) {
         detached.detach(&root.join(key))?;
@@ -180,7 +178,6 @@ pub(crate) fn detach_staged_artifact_keys_if_unchanged(
     if !validate_staged_artifact_root(artifact_dir)? {
         return Ok(detached);
     }
-    let store_lock = open_store_lock(&root)?;
     #[cfg(test)]
     super::hook::pause(
         artifact_dir,
@@ -189,8 +186,8 @@ pub(crate) fn detach_staged_artifact_keys_if_unchanged(
     // Maintenance holds publication exclusion here. A foreign warm/reader
     // may retain the store lock indefinitely; defer rather than queue all
     // compiles behind it (soldr#3843 / #3845).
-    let _store_lock_guard = match crate::core::wait::lock_exclusive_for(
-        &store_lock,
+    let _store_lock_guard = match StagedCommitGuard::acquire_for(
+        artifact_dir,
         lock_budget.min(std::time::Duration::from_secs(2)),
     ) {
         Ok(guard) => guard,
@@ -245,16 +242,13 @@ pub(in crate::daemon::server) fn detach_staged_artifacts_for_clear(
     if !validate_staged_artifact_root(artifact_dir)? {
         return Ok(detached);
     }
-    let store_lock = open_store_lock(&root)?;
     #[cfg(test)]
     super::hook::pause(
         artifact_dir,
         super::StagedHookPoint::MaintenanceStoreLockPending,
     );
-    let _store_lock_guard = crate::core::wait::lock_exclusive_for(
-        &store_lock,
-        lock_budget.min(crate::core::wait::PROBE),
-    )?;
+    let _store_lock_guard =
+        StagedCommitGuard::acquire_for(artifact_dir, lock_budget.min(crate::core::wait::PROBE))?;
     for entry in fs::read_dir(&root)?.flatten() {
         if entry.file_name() == STORE_LOCK || entry.file_name() == super::trash::STAGED_TRASH {
             continue;
@@ -279,9 +273,7 @@ pub(super) fn detach_generation_if_unreferenced_for(
     if !validate_staged_artifact_root(artifact_dir)? {
         return Ok(detached);
     }
-    let root = staged_root(artifact_dir);
-    let file = open_store_lock(&root)?;
-    let _guard = crate::core::wait::lock_exclusive_for(&file, lock_budget)?;
+    let _guard = StagedCommitGuard::acquire_for(artifact_dir, lock_budget)?;
     match fs::read_to_string(pointer_path(artifact_dir, key)) {
         Ok(current) if current.trim() == generation => return Ok(detached),
         Ok(_) => {}
@@ -338,8 +330,7 @@ pub(crate) fn detach_orphaned_staged_paths_for(
     if candidates.is_empty() {
         return Ok((0, detached));
     }
-    let store_lock = open_store_lock(&root)?;
-    let _guard = crate::core::wait::lock_exclusive_for(&store_lock, lock_budget)?;
+    let _guard = StagedCommitGuard::acquire_for(artifact_dir, lock_budget)?;
     let mut removed = 0;
     for (path, generation) in candidates {
         if let Some((key, name)) = generation {
@@ -377,8 +368,9 @@ mod bounded_lock_tests {
         let root = staged_root(directory.path());
         fs::create_dir_all(root.join("aa")).unwrap();
         fs::write(root.join("aa/payload"), b"preserve while in use").unwrap();
-        let file = open_store_lock(&root).unwrap();
-        let reader = kernal_api::platform::fs::try_lock_shared(&file).unwrap();
+        let reader =
+            super::super::StagedReadGuard::acquire_for(directory.path(), crate::core::wait::PROBE)
+                .unwrap();
         let expected = HashMap::from([("aa".to_string(), None)]);
         let (tx, rx) = std::sync::mpsc::channel();
         let artifact_dir = directory.path().to_owned();

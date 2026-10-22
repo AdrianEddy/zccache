@@ -53,7 +53,8 @@ pub(in crate::daemon::server) use read_guard::{
 mod root_safety;
 pub(in crate::daemon::server) use root_safety::validate_staged_artifact_root;
 use root_safety::{
-    is_staged_link_or_reparse, open_store_lock, remove_staged_link_or_reparse, staged_root,
+    is_staged_link_or_reparse, remove_staged_link_or_reparse, staged_root, StagedCommitGuard,
+    StagedReadGuard,
 };
 #[cfg(test)]
 mod fault;

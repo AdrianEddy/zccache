@@ -9,7 +9,8 @@ use std::path::Path;
 // in-process `zccache warm` command provably contend on one lock file.
 // See `zccache_artifact::staged_lock`.
 pub(super) use zccache_artifact::staged_lock::{
-    is_staged_link_or_reparse, open_store_lock, staged_root, validate_staged_root_path,
+    is_staged_link_or_reparse, staged_root, validate_staged_root_path, StagedCommitGuard,
+    StagedReadGuard,
 };
 
 pub(super) fn remove_staged_link_or_reparse(

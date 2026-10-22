@@ -224,9 +224,9 @@ fn ui() {
     let _directory =
         ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
     dylint_testing::ui::Test::src_base(env!("CARGO_PKG_NAME"), "examples")
-        .rustc_flags(ui_dependencies::core_flags(std::time::Duration::from_secs(
-            300,
-        )))
+        .rustc_flags(ui_dependencies::dependency_flags(
+            std::time::Duration::from_secs(300),
+        ))
         .run();
 }
 

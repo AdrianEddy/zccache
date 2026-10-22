@@ -24,7 +24,7 @@ pub use layout::{
     record_legacy_artifact_access, resolve_artifact_payloads, resolve_staged_artifact_files,
     LegacyArtifactAccessPurpose, ResolvedArtifactPayload, LEGACY_PATH_VALIDATE_ENV,
 };
-pub use staged_lock::StagedReadGuard;
+pub use staged_lock::{StagedCommitGuard, StagedReadGuard};
 
 pub use reconcile::{
     reconcile_index_from_disk, IndexReconciliation, DEFAULT_RECONCILE_BUDGET,

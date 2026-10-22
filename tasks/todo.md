@@ -1817,3 +1817,55 @@ NEXT (still incomplete, do not push/merge #1964):
   reader-path validity, 2s maintenance contention deferral and zero-wait empty
   trash cleanup. All waits must require Duration; no unbounded compatibility
   overload. Then classify commit vs read/drain effects by resolved types.
+
+
+### #1964 native-store facade migration (2026-10-22)
+
+- Added sealed artifact::StagedCommitGuard with mandatory acquire_for(root,
+  Duration). Raw open_store_lock is now private to artifact staged_lock.
+  StagedReadGuard now has acquire_for and acquire_if_present_for with mandatory
+  Duration; the parameterless acquisition APIs were removed. It is must_use.
+- Migrated daemon publication, generation retirement, Clear auxiliary retirement,
+  recovery/empty-trash unlink, pooled hit materialization, snapshot export, CLI
+  warming and coordination fixtures. Every participant still uses the canonical
+  .staged-v2/.store.lock. Exclusive guards own native handles rather than exposing
+  a File or constructing a self-referential borrowing guard. Key publication's
+  separate per-key operation lock remains distinct.
+- Missing-type/method RED retained in
+  /tmp/zccache-1964-store-facade-api-red.log; five native coordination tests GREEN
+  (/tmp/zccache-1964-store-facade-api-green.log), including zero-wait contention
+  and actual exclusive/shared interference.
+- 95 daemon regressions passed with the migrated store API
+  (/tmp/zccache-1964-store-facade-runtime.log). 14 snapshot tests and the CLI warm
+  contention regression passed (/tmp/zccache-1964-store-facade-consumers.log).
+  Its production build caught an unused cfg(test)-only root binding, now removed.
+- Single-worker embedded real-hit/control-plane regression passed. It now requires
+  rustc instead of silently returning when the compiler is missing; the hardened
+  run passed (/tmp/zccache-1964-store-facade-control-plane-required.log).
+- Dylint recognizes the actual StagedCommitGuard by defining crate, type and
+  parent module DefIds. UI dependency flags now include actual artifact and core
+  rlibs, produced via bounded soldr Cargo JSON. All 14 fixtures passed, including
+  rejection under a native commit, acceptance after release, and retained-reader
+  I/O (/tmp/zccache-1964-native-store-ui-green.log).
+
+Remaining enforcement work before #1964 can ship:
+- Separate Critical vs Lease/Drain effects: publication/store commits forbid
+  bulk work; reader/admission operation permits allow their intended I/O, while
+  shared trash sweeps remain forbidden under reader/native/drain exclusion.
+- Make ownership inspection structural: Weak and PhantomData do not own their
+  generic guard parameters. SharedState's weak materialization slot previously
+  caused phantom FileLock ownership when its local target directly exposed the
+  raw native guard. The migrated target now contains opaque StagedReadGuard;
+  do not reintroduce that false positive when classifying reader leases.
+- Permit only immediate fixed-depth name enumeration in the exact bounded
+  detach owners returning typed trash. Do not move enumeration ahead of native
+  exclusion without proving publisher/replacement safety. Recursive payload
+  scans and helper-hidden slow work must still be rejected under commits.
+- Classify actual shared sweep facades and transitive helper/closure effects,
+  prevent function-pointer and leaked/erased-guard bypasses, and resolve consumed
+  MIR without a fail-open fallback. Add async/callback/actual-native fixture
+  coverage. Existing failed production probes are development evidence, not a
+  green final guard gate.
+- Final OS/features/planted violations, docs, clippy, one clud-review invocation,
+  clean committed full gate, PR merge, origin/main rebase and branch cleanup are
+  still required. Then continue #1965–1971 in order.

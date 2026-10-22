@@ -1,8 +1,8 @@
 //! Detached staged trees. Only this owner recursively removes retired data.
 
 use super::{
-    is_staged_link_or_reparse, open_store_lock, remove_registered_blob,
-    remove_staged_link_or_reparse, staged_root, validate_staged_artifact_root,
+    is_staged_link_or_reparse, remove_registered_blob, remove_staged_link_or_reparse, staged_root,
+    validate_staged_artifact_root, StagedCommitGuard,
 };
 use crate::core::NormalizedPath;
 use std::fs;
@@ -150,11 +150,7 @@ impl DetachedStagedTrash {
 /// Recursive cleanup has already finished without any store guard. A busy
 /// publisher leaves the empty private directory for the next pass.
 fn try_remove_empty_trash(artifact_dir: &Path, trash: &Path) {
-    let root = staged_root(artifact_dir);
-    let Ok(file) = open_store_lock(&root) else {
-        return;
-    };
-    let Ok(_guard) = crate::core::wait::lock_exclusive_for(&file, Duration::ZERO) else {
+    let Ok(_guard) = StagedCommitGuard::acquire_for(artifact_dir, Duration::ZERO) else {
         return;
     };
     if validate_trash(trash).is_err() {

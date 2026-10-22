@@ -18,11 +18,8 @@ pub(super) fn persist_staged_generation(
     }
 
     let root = staged_root(artifact_dir);
-    let store_lock = open_store_lock(&root)
+    let _store_lock_guard = StagedReadGuard::acquire_for(artifact_dir, crate::core::wait::PROBE)
         .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
-    let _store_lock_guard =
-        crate::core::wait::lock_shared_for(&store_lock, crate::core::wait::PROBE)
-            .map_err(|error| publish_error(StagedPublishFailure::StoreSetup, error))?;
     #[cfg(test)]
     hook::pause(artifact_dir, StagedHookPoint::PublicationStoreLocked);
     let key_root = root.join(key_hex);

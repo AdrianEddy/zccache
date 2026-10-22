@@ -134,6 +134,12 @@ fn contains_guard<'tcx>(
                             | "RwLockReadGuard"
                     )
                 }),
+                "zccache_artifact" => {
+                    name == Some("StagedCommitGuard")
+                        && cx.tcx.opt_parent(adt.did()).is_some_and(|parent| {
+                            cx.tcx.item_name(parent).as_str() == "staged_lock"
+                        })
+                }
                 "std" | "kernal_api" | "tokio" | "lock_api" => name.is_some_and(|name| {
                     matches!(
                         name,

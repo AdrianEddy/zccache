@@ -10,8 +10,7 @@ pub(in crate::daemon::server) fn detach_clear_artifact_paths_for(
     let mut detached = detach_staged_artifacts_for_clear(artifact_dir, bound)?;
     let root = staged_root(artifact_dir);
     // Also supplies an owned trash root for a legacy-only cache.
-    let file = open_store_lock(&root)?;
-    let _guard = crate::core::wait::lock_shared_for(&file, bound)?;
+    let _guard = StagedReadGuard::acquire_for(artifact_dir, bound)?;
     for entry in fs::read_dir(artifact_dir)? {
         let entry = entry?;
         let path = entry.path();

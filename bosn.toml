@@ -185,3 +185,15 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-core --lib sync::tes
 [task.staged-accounting-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib disk_maintenance::tests::trash --locked"
+
+[task.staged-coordination-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib staged_lock --locked"
+
+[task.staged-consumer-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib snapshot --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-cli-core --features cli --lib warm_waits_for_the_staged_store_lock_before_materializing --locked"
+
+[task.staged-control-plane-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_real_cache_hits_leave_embedded_control_plane_responsive --locked"
