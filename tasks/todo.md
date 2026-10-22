@@ -1674,3 +1674,21 @@ Remaining #1964 work:
 - Still open: production KV recovery scheduling and crash regression, global
   maintenance writer pause, generation replacement race, semantic Dylint and
   required UI/OS/feature gates, docs/review/full gate/PR merge/main rebase.
+
+
+### #1964 production recovery scheduling (2026-10-22)
+
+- Both Clear and periodic maintenance previously failed the new production
+  regression by retaining an abandoned KV namespace indefinitely (RED:
+  `/tmp/zccache-1964-production-kv-recovery-red.log`). Both now invoke bounded
+  retired-namespace recovery on the blocking lane outside publication exclusion.
+  Clear also retries pre-existing staged trash. Successful unlink credits are
+  included; incomplete recovery is logged and retained for retry.
+- All focused store/maintenance/reader/Clear tests passed, including both new
+  recovery entrypoint tests (`/tmp/zccache-1964-production-kv-recovery-green.log`).
+- KV process-exit recovery also passed with a fresh same-key replacement intact;
+  full KV suite: 30 passed, one existing allocation-heavy test and one explicitly
+  parent-invoked child fixture ignored in the outer harness
+  (`/tmp/zccache-1964-kv-process-recovery.log`).
+- Next: maintenance global writer/cancellation regression, explicit generation
+  replacement race, then semantic Dylint enforcement and final PR gates.

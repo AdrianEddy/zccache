@@ -22,7 +22,7 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
     let maintenance_state = Arc::clone(&state);
     let report = launch_maintenance_blocking(runtime_handle, move || {
         let dep_graph = maintenance_state.dep_graph.load_full();
-        maintain_disk_artifacts_with_barrier(
+        let mut report = maintain_disk_artifacts_with_barrier(
             MaintenancePass {
                 artifact_dir: maintenance_state.artifact_dir.as_path(),
                 artifacts: &maintenance_state.artifacts,
@@ -37,7 +37,14 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
             },
             Some(&maintenance_state.artifact_publication),
             Some(&maintenance_state.shutdown_requested),
-        )
+        )?;
+        report.bytes_reclaimed = report
+            .bytes_reclaimed
+            .saturating_add(recover_retired_exec_for(
+                &maintenance_state.exec_store,
+                crate::core::wait::PROBE,
+            ));
+        Ok::<_, io::Error>(report)
     })
     .await
     .map_err(io::Error::other)??;
@@ -443,5 +450,25 @@ pub(in crate::daemon::server) fn spawn_disk_maintenance(
     match spawn_handle {
         Some(handle) => handle.launch(task),
         None => kernal_api::async_engine::launch(task),
+    }
+}
+
+/// Runs only on the blocking cleanup lane, outside publication exclusion.
+pub(in crate::daemon::server) fn recover_retired_exec_for(store: &KvStore, bound: Duration) -> u64 {
+    match store.sweep_retired_namespaces_for(bound) {
+        Ok(report) => {
+            if report.failures > 0 || report.deferred {
+                tracing::warn!(
+                    failures = report.failures,
+                    deferred = report.deferred,
+                    "retired exec namespaces retained for the next maintenance pass"
+                );
+            }
+            report.reclaimed_bytes
+        }
+        Err(error) => {
+            tracing::warn!(%error, "retired exec namespace recovery deferred");
+            0
+        }
     }
 }

@@ -106,6 +106,22 @@ fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Re
         }
         Err(error) => tracing::warn!(%error, "detached Clear exec namespace awaits recovery"),
     }
+    // Retry durable names left by older failed or cancelled cleanup too.
+    match persist::sweep_staged_trash_for(state.artifact_dir.as_path(), bound) {
+        Ok(report) => {
+            on_disk_bytes_freed = on_disk_bytes_freed.saturating_add(report.reclaimed_bytes);
+            if report.failures > 0 || report.deferred {
+                tracing::warn!(
+                    failures = report.failures,
+                    deferred = report.deferred,
+                    "Clear left staged trash for the next maintenance pass"
+                );
+            }
+        }
+        Err(error) => tracing::warn!(%error, "Clear staged recovery deferred"),
+    }
+    on_disk_bytes_freed =
+        on_disk_bytes_freed.saturating_add(recover_retired_exec_for(&state.exec_store, bound));
     if !index_cleared {
         return Response::Error {
             message: "persistent artifact index Clear failed or timed out".into(),

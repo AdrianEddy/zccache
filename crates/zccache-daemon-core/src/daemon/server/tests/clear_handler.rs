@@ -9,6 +9,9 @@
 
 use super::super::*;
 
+#[path = "clear_handler_recovery.rs"]
+mod recovery;
+
 #[tokio::test]
 async fn handle_clear_releases_publication_before_kv_sweep() {
     crate::test_support::test_timeout(async {

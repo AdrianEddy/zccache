@@ -19,7 +19,8 @@ use commit::remove_planned_artifacts;
 #[cfg(test)]
 use runtime::*;
 pub(super) use runtime::{
-    maintain_state_disk, spawn_disk_maintenance, wait_for_next_pass_or_shutdown,
+    maintain_state_disk, recover_retired_exec_for, spawn_disk_maintenance,
+    wait_for_next_pass_or_shutdown,
 };
 // #1907: re-exported so the `#[cfg(test)]` child module can unit-test the
 // pure path filter without a running daemon.
