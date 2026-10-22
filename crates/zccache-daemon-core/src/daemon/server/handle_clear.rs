@@ -15,12 +15,7 @@ pub(super) async fn handle_clear(state: &Arc<SharedState>) -> Response {
     };
     let worker_state = Arc::clone(state);
     match state
-        .launch_blocking(move || {
-            // Capture the root last so queued cancellation drops it last.
-            let _ = &worker_state;
-            let _ = &maintenance;
-            // On execution/unwind, retain native ownership through the worker state handle drop.
-            let _root = root;
+        .launch_blocking_with_root(root, move || {
             let state = worker_state;
             let _maintenance = maintenance;
             clear_on_blocking_lane(&state, crate::core::wait::PROBE)
