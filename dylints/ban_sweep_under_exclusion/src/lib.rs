@@ -7,6 +7,7 @@ extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
 mod cleanup_owners;
+mod completed_future;
 mod detach_policy;
 mod drop_paths;
 mod effects;

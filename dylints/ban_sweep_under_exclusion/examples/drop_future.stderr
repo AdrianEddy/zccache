@@ -12,5 +12,11 @@ error: slow filesystem work retains publication or store exclusion
 LL |     drop(callback);
    |     ^^^^^^^^^^^^^^
 
-error: aborting due to 2 previous errors
+error: slow filesystem work retains publication or store exclusion
+  --> $DIR/drop_future.rs:47:31
+   |
+LL |     CustomFuture(cleanup).await;
+   |                               ^
+
+error: aborting due to 3 previous errors
 

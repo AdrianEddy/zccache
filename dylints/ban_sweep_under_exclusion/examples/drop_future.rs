@@ -36,4 +36,15 @@ fn released_saved(permit: PublicationReadPermit, make: fn() -> Cleanup) {
     drop(permit);
     drop(callback);
 }
+struct CustomFuture(Cleanup);
+impl std::future::Future for CustomFuture {
+    type Output = ();
+    fn poll(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        std::task::Poll::Ready(())
+    }
+}
+async fn held_custom(permit: PublicationReadPermit, cleanup: Cleanup) {
+    CustomFuture(cleanup).await;
+    drop(permit);
+}
 fn main() {}

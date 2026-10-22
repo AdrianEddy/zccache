@@ -139,6 +139,9 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         // Pre-elaboration MIR retains drops of already moved values. They
         // cannot execute a destructor and must not manufacture cleanup work.
         if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {
+            if super::completed_future::at_drop(cx, body, block, *place) {
+                continue;
+            }
             match data.rev_lookup.find(place.as_ref()) {
                 rustc_mir_dataflow::move_paths::LookupResult::Exact(index)
                 | rustc_mir_dataflow::move_paths::LookupResult::Parent(Some(index))
