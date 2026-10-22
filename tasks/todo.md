@@ -2053,3 +2053,26 @@ Remaining enforcement work before #1964 can ship:
   verified its managed container had no test process remaining. The corrected
   regression inspects the map only when it can acquire publication ownership.
   Only its subsequent assertion-based RED should count as bug evidence.
+
+### #1964 provisional-owner destructor deferral (2026-10-22)
+
+- Actual bug: Clear's artifacts.clear dropped the last CachedArtifact owner of
+  StagedCompilePlan while retaining publication exclusion. The plan's destructor
+  recursively deletes its private output root. Maintenance removal had the same
+  last-owner risk in artifacts.remove.
+- Added path-scoped PrivatePlanCleanup hook and production Clear regression.
+  Valid focused RED is /tmp/zccache-1964-provisional-owner-red-bounded.log:
+  assertion "private plan destructor retained publication exclusion" failed in
+  0.13s after both workers were resumed/drained. Earlier broad/focused attempts
+  described above are not the RED receipt for this fix.
+- Clear now moves removed records into an outer-scope retirement Vec; maintenance
+  passes an outer Vec by mutable reference into its short removal commit. Those
+  owners drop after the publication scope, including early-error/panic unwinding.
+  Native store and logical invalidation ordering are unchanged.
+- Focused GREEN /tmp/zccache-1964-provisional-owner-focused-green.log proves old
+  entry unreachability, publication admission and a real KV publication while
+  private cleanup is paused, survival of that new value after Clear, and removal
+  of the old private root. Declared bosn task is staged-private-cleanup-test.
+- Full staged-store-regressions passes all 98 tests with the new fixture
+  (/tmp/zccache-1964-provisional-owner-regressions.log), including the previously
+  failed one-second observation. No timing threshold or test concurrency changed.

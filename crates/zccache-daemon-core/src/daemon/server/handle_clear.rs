@@ -25,6 +25,9 @@ pub(super) async fn handle_clear(state: &Arc<SharedState>) -> Response {
 }
 
 fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Response {
+    // Keep retired owners in the outer scope: even an error/panic releases
+    // publication exclusion before a last private-plan owner can clean files.
+    let mut retired_artifacts = Vec::new();
     let (
         artifacts_removed,
         metadata_cleared,
@@ -39,7 +42,17 @@ fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Re
         let artifacts_removed = state.artifacts.len() as u64;
         let metadata_cleared = state.cache_system.metadata().len() as u64;
         let dep_graph_contexts_cleared = state.dep_graph.load().stats().context_count as u64;
-        state.artifacts.clear();
+        let keys: Vec<_> = state
+            .artifacts
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        retired_artifacts.reserve(keys.len());
+        for key in keys {
+            if let Some((_, artifact)) = state.artifacts.remove(&key) {
+                retired_artifacts.push(artifact);
+            }
+        }
         // Compiler environment caches self-verify and intentionally survive Clear (#558).
         state.dep_graph.load().clear();
         state.cache_system.clear();
@@ -91,6 +104,7 @@ fn clear_on_blocking_lane(state: &SharedState, bound: std::time::Duration) -> Re
             index_cleared,
         )
     };
+    drop(retired_artifacts);
     #[cfg(test)]
     persist::StagedHookGuard::pause_kv_sweep(state.cache_dir.as_path());
     let mut on_disk_bytes_freed = 0u64;

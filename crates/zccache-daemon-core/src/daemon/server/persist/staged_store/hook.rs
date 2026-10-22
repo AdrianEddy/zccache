@@ -16,6 +16,7 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     MaintenanceStoreLockPending,
     MaterializationStoreLockPending,
     TreeSweep,
+    PrivatePlanCleanup,
     KvNamespaceSweep,
 }
 
@@ -41,6 +42,9 @@ pub(in crate::daemon::server) struct StagedHookGuard {
 }
 
 impl StagedHookGuard {
+    pub(in crate::daemon::server) fn pause_private_plan_cleanup(scope: &Path) {
+        pause(scope, StagedHookPoint::PrivatePlanCleanup);
+    }
     pub(in crate::daemon::server) fn pause_kv_sweep(scope: &Path) {
         pause(scope, StagedHookPoint::KvNamespaceSweep);
     }

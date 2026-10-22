@@ -15,6 +15,7 @@ pub(super) fn remove_planned_artifacts(
     artifact_store: &ArtifactStore,
     index_writer_tx: Option<&kernal_api::async_engine::UnboundedSender<IndexWriterCommand>>,
     dep_graph: &DepGraph,
+    retired_artifacts: &mut Vec<CachedArtifact>,
 ) -> io::Result<RemovalCommit> {
     let planned: HashSet<&str> = plan.selected.iter().map(String::as_str).collect();
     let staged_expected: HashMap<String, Option<String>> = scanned
@@ -77,7 +78,9 @@ pub(super) fn remove_planned_artifacts(
     artifact_store.remove_batch(&keys);
     dep_graph.invalidate_artifact_keys(&removed_keys.iter().cloned().collect());
     for key in &removed_keys {
-        artifacts.remove(key);
+        if let Some((_, artifact)) = artifacts.remove(key) {
+            retired_artifacts.push(artifact);
+        }
     }
     if let Some(tx) = index_writer_tx {
         let _ = tx.send(IndexWriterCommand::Remove(removed_keys.clone()));

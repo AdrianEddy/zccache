@@ -9,6 +9,8 @@
 
 use super::super::*;
 
+#[path = "clear_handler_provisional.rs"]
+mod provisional;
 #[path = "clear_handler_recovery.rs"]
 mod recovery;
 

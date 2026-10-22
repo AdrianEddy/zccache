@@ -197,3 +197,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-artifact --lib snaps
 [task.staged-control-plane-test]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib concurrent_real_cache_hits_leave_embedded_control_plane_responsive --locked"
+
+[task.staged-private-cleanup-test]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib clear_releases_publication_before_last_provisional_owner_cleanup --locked"

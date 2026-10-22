@@ -904,6 +904,8 @@ impl StagedCompilePlan {
     }
 
     pub(in crate::daemon::server) fn cleanup(&self) -> io::Result<()> {
+        #[cfg(test)]
+        super::staged_store::StagedHookGuard::pause_private_plan_cleanup(&self.root);
         std::fs::remove_dir_all(&self.root).or_else(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 Ok(())

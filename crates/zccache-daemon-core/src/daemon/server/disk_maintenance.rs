@@ -821,6 +821,9 @@ fn maintain_disk_artifacts_with_barrier(
             pressure = plan.pressure;
             break;
         }
+        // This scope outlives the writer below, including error unwinding.
+        // Returned cache records may own recursive private-plan destructors.
+        let mut retired_artifacts = Vec::with_capacity(scanned.len());
         let (plan, commit) = if let Some(publication_barrier) = publication_barrier {
             // Filesystem scanning and candidate planning are read-only and may
             // take seconds on a large cache. Only exclude cache hits for the
@@ -852,6 +855,7 @@ fn maintain_disk_artifacts_with_barrier(
                 artifact_store,
                 index_writer_tx,
                 dep_graph,
+                &mut retired_artifacts,
             )?;
             (commit_plan, removed)
         } else {
@@ -863,9 +867,11 @@ fn maintain_disk_artifacts_with_barrier(
                 artifact_store,
                 index_writer_tx,
                 dep_graph,
+                &mut retired_artifacts,
             )?;
             (plan, removed)
         };
+        drop(retired_artifacts);
         let sweep = commit.trash.sweep_for(crate::core::wait::PROBE)?;
         artifact_bytes_reclaimed = artifact_bytes_reclaimed
             .saturating_add(commit.legacy_reclaimed_bytes)
