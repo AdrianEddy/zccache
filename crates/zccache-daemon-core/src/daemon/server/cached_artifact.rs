@@ -288,7 +288,7 @@ impl CachedArtifact {
         }
     }
 
-    fn access(&self) -> std::sync::MutexGuard<'_, ArtifactAccess> {
+    fn access(&self) -> zccache_core::blocking_sync::MutexGuard<'_, ArtifactAccess> {
         self.access
             .lock_for(zccache_core::sync::STATE_TIMEOUT)
             .unwrap_or_else(std::sync::PoisonError::into_inner)

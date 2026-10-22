@@ -1429,7 +1429,7 @@ isolated runtime tests used the normal soldr wrapper.
 Use this checkout only. Complete and merge each child PR before starting the
 next child, then sync/rebase against origin/main and leave a clean tree.
 
-- [ ] #1961 bounded state/probe facade migration: finish review, required gate and merge.
+- [x] #1961 bounded state/probe facade migration: merged PR #1972; full six-lane gate passed. Synced/rebased main to origin/main (25d71f09), clean tree before #1962.
 - [ ] #1962 holder watchdog and diagnostics.
 - [ ] #1963 bounded generic process liveness.
 - [ ] #1964 detach staged deletion from publication exclusion.
@@ -1462,10 +1462,53 @@ allowed overlapping link operations, and concurrent staged initialization took
 duplicate OS leases. Opaque permits now retain the outer gate owner; a separate
 data-free initialization gate coalesces staged leases outside the state mutex.
 The weak-owner test failed before the repair; core synchronization tests and
-both unchanged integration assertions pass afterward. Full gate rerun pending.
+both unchanged integration assertions pass afterward. The subsequent six-lane gate passed in 1,420s; PR #1972 merged and closed #1961.
 
 The correction gate passed all five non-integration lanes. Integration setup
 repeatedly failed before tests on GitHub anonymous latest-release rate limits.
 Pin setup-uv in the existing CI/integration workflows to verified uv 0.12.13
 (the host version), removing the latest-release lookup without skipping tests.
-Rerun the gate for the changed tree before publication.
+All six lanes subsequently passed on that tree before PR #1972 was published and merged.
+
+## #1962 implementation plan
+
+- [x] Capture subprocess RED for wedged State callbacks and native holders, retaining libtest capture and bounded process/output ownership. All three timed out against the previous owners.
+- [x] Add independent RAII waiter/holder registry and watchdog with caller/thread diagnostics; report long waits, terminate overdue short holds. Three real-child regressions now terminate with visible diagnostics.
+- [x] Integrate State and native guard owners, preserving poison and cancellation; separately budget spawn/materialization holds and exclude long data-free operations.
+- [x] Verify spawn/materialization subprocess failures, cancelled/dropped registration cleanup, recoverable acquisition, legitimate long operations and writer fairness.
+- [x] Extend deny-level Dylint/UI enforcement for the private watchdog owner and wrapper guards; update architecture guarantees and limitations.
+- [ ] Run focused RED -> GREEN, review, full clean-tree gate, merge separate PR, then rebase main to origin/main.
+
+#1962 first implementation evidence: eight isolated watchdog tests pass,
+including real blocked async/sync callbacks, a native holder, cancelled waiters,
+poison/drop cleanup, report-only overdue queues and a real operation permit
+held beyond the short-state budget. Core/daemon all-target Clippy with
+`test-support` passes with warnings denied. Depgraph persistence uses a data-free
+operation gate because its scope includes disk I/O. Spawn/materialization
+subprocess coverage, lint fixtures, docs, review and full gate remain pending.
+
+#1962 complete focused evidence: 217 isolated core tests and 16 maintenance
+schedule tests pass. Actual spawn/materialization subprocesses terminate at the
+production 15s/120s limits with holder/waiter sites visible despite capture.
+A real-core Dylint example compiled forbidden wrapper guards before the resolved
+wrapper-type classification; it now rejects aliases, concrete wrapper fields,
+unit native guards, UFCS and function-item acquisition bypasses. All three
+existing UI fixtures and both dependency-bearing examples pass. Review,
+workspace Clippy and full clean-tree qualification are next.
+
+#1962 primary review found two HIGH issues; both have new focused RED -> GREEN
+regressions: unread/full stderr blocked termination, and real spawn/copy admission
+aborted after 15s during a legitimate 120s-budget copy. Diagnostic delivery now
+uses one bounded writer and at most 250ms before termination; real admission
+uses the operation queue budget, with unchanged 15s/120s hold limits. Twelve
+final watchdog tests, legitimate-copy regression, all five UI fixtures and
+workspace/all-target Clippy with cli+download-daemon features pass. Correction
+review is clean (one primary reviewer). Full clean-tree gate remains pending.
+
+#1962 first clean-tree gate passed lint, Python, MSRV and docs, then exposed
+Dylint6.0.3's example-runner dependency discovery requiring a bare rustc argv.
+Normal soldr compiler wrapping prevents that parser from identifying the
+compiler invocation. The harness now gets real-core link inputs from Cargo JSON
+artifacts and runs both examples through the UI source runner, preserving the
+managed nightly toolchain and wrapper. Five local UI fixtures pass; correction
+review is clean. Full isolated normal-wrapper gate rerun remains pending.

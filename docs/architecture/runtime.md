@@ -74,8 +74,8 @@ status use this boundary. Blocking loaders use `with_blocking_for`.
 A separate data-free gate coalesces initial staged-store lease acquisition
 without holding the weak-slot state mutex over filesystem waits.
 
-`sync::Barrier` supplies shared and
-exclusive publication/admission permits. These types contain no caller data.
+`sync::Barrier` supplies shared and exclusive publication/admission permits.
+These types contain no caller data.
 Their acquisition APIs require a `Duration`. Single-flight compiler/include
 probes, linker output exclusion, and disk maintenance use gates. Publication and
 resource admission use barriers. Cancellation of an acquisition drops its queue
@@ -90,6 +90,34 @@ and gate APIs return `LockTimeout`; essential acquisition expiry logs the caller
 and aborts the service so its supervisor can restart it. This is a deliberate
 failure mode, replacing a silent, unbounded stall.
 
+The private `sync_watchdog` owner registers waiters and short critical-section
+holders with RAII tickets. `State` callbacks and native guards have a 15-second
+hold budget, independent of their acquisition argument. A dedicated OS thread
+checks every 100 milliseconds, so a blocked async executor cannot suppress the
+check. An overdue holder queues every registered holder/waiter site, owner
+identity, thread and nanosecond timing, then aborts after allowing at most 250 ms
+for diagnostic delivery. Overdue waiters are reported once without aborting:
+a queue behind legitimate work is not a broken holder.
+Acquisition expiry retains its existing recoverable or essential failure
+contract. Essential expiry also dumps the registry. Direct stderr writes bypass
+libtest print capture. A separate process-lifetime writer and a one-entry queue
+keep blocked stderr or logging locks off the monitor/termination path. Reports
+are best effort when that bounded sink is unavailable; termination still runs.
+No tracing callback runs before abort. Formatting runs outside the registry lock.
+Cancellation, normal guard release, recovered poison and panic unwinding remove
+their tickets. Failure to start the watchdog aborts rather than silently disabling it.
+
+Spawn admission uses the same native owner: shared holds cover spawn only and
+have the 15-second limit; exclusive materialization includes copying and
+publication and gets 120 seconds. Both admission entrypoints use the operation
+acquisition budget so legitimate copies and queues can outlive 15 seconds.
+Native owners can select explicit justified
+hold budgets at construction; changing an acquisition budget never changes a
+hold budget. `Gate`/`Barrier` operation permits have no protected data and are
+excluded from the short-holder watchdog. In particular, depgraph disk persistence
+uses a gate with the operation acquisition budget rather than a short unit mutex.
+Operation liveness and cancellation remain responsibilities of their owners.
+
 `zccache_core::wait` owns bounded channel sends/receives, thread joins, child waits,
 captured probes, file locks, and synchronous runtime bridges. Budgets are required
 arguments. Child/probe containment and captured-output readers stay with
@@ -103,20 +131,25 @@ seconds; Clear and ordinary store-lock operations have a 30-second budget.
   blocking-lock acquisition in async bodies outside the adapter owners.
 - `ban_guard_across_await` inspects compiler coroutine witnesses for data guards,
   including aliases, function-returned guards, and guards in generic containers.
-  It covers DashMap guards as well as mutex/reader-writer guards. Lexical scopes
+  It covers DashMap guards, native watchdog guard wrappers, and mutex/reader-writer guards. Lexical scopes
   release guards before suspension; explicit `drop` alone can leave storage in
   the coroutine witness and is therefore insufficient for this rule.
 
-Only core's synchronization/wait adapters may use raw primitives. Test harnesses
+Only core's synchronization/wait adapters and its private watchdog bookkeeping
+may use raw primitives. Test harnesses
 are exempt; each production crate is also linted without the test harness.
 Existing Dylint wiring runs the library on Linux, Windows and macOS selections.
 The facade compile-fail doctests and the lint's UI fixtures prove rejected shapes.
 Run the runtime regressions with `bosn run --task bounded-sync-test`.
+Watchdog regressions use `bosn run --task lock-watchdog-test` and
+`bosn run --task spawn-watchdog-test`; the latter exercises the actual
+120-second materialization hold limit in an isolated child process.
 
 These boundaries prevent data guards from spanning awaits and require budgets
-for the covered lock/wait APIs. They do not prove arbitrary callbacks terminate,
-cancel a kernel syscall already running, or establish a global order between
-operation permits.
+for the covered lock/wait APIs. The holder watchdog terminates the process on
+observed overruns; it does not cancel arbitrary callbacks in place, guarantee a
+hard real-time deadline, interrupt an uninterruptible kernel syscall, or establish
+a global order between operation permits.
 
 ### Soldr fixes audited (2026-09-01 through 2026-10-21)
 

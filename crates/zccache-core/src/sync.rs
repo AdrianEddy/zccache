@@ -6,6 +6,7 @@
 
 pub use super::sync_barrier::{Barrier, ReadPermit, WritePermit};
 
+use super::sync_watchdog::Ticket;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,15 +70,31 @@ impl<T> State<T> {
     /// }).await.await;
     /// # }
     /// ```
-    pub async fn try_with_for<R>(
+    #[track_caller]
+    pub fn try_with_for<R, F: FnOnce(&mut T) -> R>(
+        &self,
+        bound: Duration,
+        operation: F,
+    ) -> impl std::future::Future<Output = Result<R, LockTimeout>> + use<'_, R, T, F> {
+        let site = std::panic::Location::caller();
+        self.try_with_at(bound, operation, site)
+    }
+
+    async fn try_with_at<R>(
         &self,
         bound: Duration,
         operation: impl FnOnce(&mut T) -> R,
+        site: &'static std::panic::Location<'static>,
     ) -> Result<R, LockTimeout> {
+        let mut ticket = Ticket::waiting(self, "State", site);
         let mut guard = tokio::time::timeout(bound, self.inner.lock())
             .await
             .map_err(|_| LockTimeout(bound))?;
-        Ok(operation(&mut guard))
+        ticket.holding(STATE_TIMEOUT);
+        let result = operation(&mut guard);
+        drop(guard);
+        drop(ticket);
+        Ok(result)
     }
 
     /// Access essential state; fail loudly rather than silently wedge on expiry.
@@ -89,7 +106,7 @@ impl<T> State<T> {
     ) -> impl std::future::Future<Output = R> + use<'_, R, T, F> {
         let site = std::panic::Location::caller();
         async move {
-            match self.try_with_for(bound, operation).await {
+            match self.try_with_at(bound, operation, site).await {
                 Ok(result) => result,
                 Err(error) => synchronization_failed(site, error),
             }
@@ -99,10 +116,15 @@ impl<T> State<T> {
     /// Access from a blocking worker. Never call this on an async executor.
     #[track_caller]
     pub fn with_blocking_for<R>(&self, bound: Duration, operation: impl FnOnce(&mut T) -> R) -> R {
+        let mut ticket = Ticket::waiting(self, "State(blocking)", std::panic::Location::caller());
         let started = std::time::Instant::now();
         loop {
             if let Ok(mut guard) = self.inner.try_lock() {
-                return operation(&mut guard);
+                ticket.holding(STATE_TIMEOUT);
+                let result = operation(&mut guard);
+                drop(guard);
+                drop(ticket);
+                return result;
             }
             if started.elapsed() >= bound {
                 synchronization_failed(std::panic::Location::caller(), LockTimeout(bound));
@@ -140,6 +162,16 @@ impl Gate {
         Self {
             inner: Arc::new(tokio::sync::Semaphore::new(1)),
         }
+    }
+
+    /// Attempt admission immediately without joining the wait queue.
+    pub fn try_acquire(self: &Arc<Self>) -> Result<GatePermit, tokio::sync::TryAcquireError> {
+        Arc::clone(&self.inner)
+            .try_acquire_owned()
+            .map(|permit| GatePermit {
+                _permit: permit,
+                _gate: Arc::clone(self),
+            })
     }
 
     /// Acquire one operation permit within a mandatory budget.
@@ -185,13 +217,15 @@ impl Gate {
 }
 
 pub(crate) fn synchronization_failed(site: &std::panic::Location<'_>, error: LockTimeout) -> ! {
-    tracing::error!(%site, %error, "bounded synchronization failed");
-    eprintln!("bounded synchronization failed at {site}: {error}");
     // Essential state is unavailable. End the service so its supervisor can
     // restart it; a detached task panic can otherwise leave a partial service.
-    std::process::abort()
+    super::sync_watchdog::acquisition_failed(site, error)
 }
 
 #[cfg(test)]
 #[path = "sync_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sync_watchdog_tests.rs"]
+mod watchdog_tests;

@@ -305,7 +305,11 @@ impl<'tcx> LateLintPass<'tcx> for BoundedSync {
 /// critical-section watchdog must not bound.
 fn span_is_in_scope(cx: &LateContext<'_>, span: rustc_span::Span) -> bool {
     let filename = source_filename(cx, span).replace('\\', "/");
-    let is_ui_fixture = filename.starts_with("ui/") || filename.contains("/ui/");
+    // Dependency-bearing UI examples also exercise every deny rule even
+    // though their source paths are outside production crate directories.
+    let is_ui_fixture = cx.sess().opts.unstable_opts.ui_testing
+        || filename.starts_with("ui/")
+        || filename.contains("/ui/");
     if is_ui_fixture {
         return true;
     }
@@ -313,9 +317,15 @@ fn span_is_in_scope(cx: &LateContext<'_>, span: rustc_span::Span) -> bool {
         return false;
     }
     let in_crate_src = filename.contains("crates/") && filename.contains("/src/");
-    let is_boundary = ["sync.rs", "sync_barrier.rs", "blocking_sync.rs", "wait.rs"]
-        .iter()
-        .any(|name| filename.ends_with(&format!("crates/zccache-core/src/{name}")));
+    let is_boundary = [
+        "sync.rs",
+        "sync_barrier.rs",
+        "sync_watchdog.rs",
+        "blocking_sync.rs",
+        "wait.rs",
+    ]
+    .iter()
+    .any(|name| filename.ends_with(&format!("crates/zccache-core/src/{name}")));
     let is_test_only = filename.contains("/tests/")
         || filename.ends_with("_tests.rs")
         || filename.ends_with("/tests.rs");
@@ -391,6 +401,10 @@ fn contains_data_guard<'tcx>(
         };
         let krate = cx.tcx.crate_name(adt.did().krate);
         let guard = match krate.as_str() {
+            "zccache_core" => {
+                path.iter().any(|part| part.as_str() == "blocking_sync")
+                    && matches!(name, "MutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard")
+            }
             "std" | "lock_api" => matches!(
                 name,
                 "MutexGuard" | "MappedMutexGuard" | "RwLockReadGuard" | "RwLockWriteGuard"
@@ -434,7 +448,15 @@ fn emit(
 mod ui_test_support {
     include!("../../ui_test_support.rs");
 }
+#[cfg(test)]
+mod ui_dependencies;
 #[test]
 fn ui() {
     ui_test_support::run(env!("CARGO_PKG_NAME"), env!("CARGO_MANIFEST_DIR"));
+    let _directory =
+        ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+    let flags = ui_dependencies::core_flags();
+    dylint_testing::ui::Test::src_base(env!("CARGO_PKG_NAME"), "examples")
+        .rustc_flags(flags)
+        .run();
 }

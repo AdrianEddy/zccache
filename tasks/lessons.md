@@ -333,3 +333,11 @@ separate unit-only permits for operations that must span awaits, and keep child
 spawn guards private behind actor-thread admission hooks. Compiler coroutine
 witnesses catch retained guards behind aliases and local wrappers; lexical
 scopes also avoid the explicit-drop storage false positives.
+
+## Guard wrappers need explicit cross-crate lint coverage (2026-10-22)
+
+A watchdog guard newtype can retain the same native lock while hiding its type
+from a checker that recurses through local fields only. Test against the real
+consumer dependency and classify the wrapper by its resolved defining module
+and type. Include aliases, concrete wrappers and unit-valued native guards;
+only separately owned data-free operation permits may survive suspension.

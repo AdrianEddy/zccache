@@ -42,6 +42,7 @@ zccache is a local-first compiler cache (23 crates) for C/C++/Rust/Emscripten, i
 
 - Blocking synchronization and wait APIs require an explicit `Duration`; do not expose an optional timeout or an unbounded overload. Use `zccache_core::wait` and `blocking_sync`.
 - Async shared data belongs in `zccache_core::sync::State` synchronous callbacks. Data guards must never cross an await; blocking operations belong on the blocking lane.
+- Short state/native critical sections have an independent holder watchdog. Use data-free operation permits for complete I/O operations; see [runtime.md](docs/architecture/runtime.md#bounded-synchronization-and-async-state) for acquisition, hold and copy budgets.
 - A timeout argument bounds acquisition, not arbitrary callback execution or a kernel filesystem syscall. Service lifecycle listeners and cancellation-driven loops need an explicit owner and shutdown path; they are not proof that every async wait is bounded.
 
 ## Commands
