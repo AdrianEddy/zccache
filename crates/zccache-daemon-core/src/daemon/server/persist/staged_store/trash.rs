@@ -4,9 +4,10 @@ use super::{
     is_staged_link_or_reparse, open_store_lock, remove_registered_blob,
     remove_staged_link_or_reparse, staged_root, validate_staged_artifact_root,
 };
+use crate::core::NormalizedPath;
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -18,8 +19,8 @@ static NEXT_TRASH: AtomicU64 = AtomicU64::new(1);
 /// leaves durable work for recovery; Drop never performs filesystem cleanup.
 #[must_use = "sweep outside exclusion, or explicitly defer to maintenance"]
 pub(crate) struct DetachedStagedTrash {
-    artifact_dir: PathBuf,
-    paths: Vec<PathBuf>,
+    artifact_dir: NormalizedPath,
+    paths: Vec<NormalizedPath>,
 }
 
 #[derive(Debug, Default)]
@@ -32,7 +33,7 @@ pub(crate) struct StagedSweepReport {
 impl DetachedStagedTrash {
     pub(super) fn empty(artifact_dir: &Path) -> Self {
         Self {
-            artifact_dir: artifact_dir.to_owned(),
+            artifact_dir: NormalizedPath::new(artifact_dir),
             paths: Vec::new(),
         }
     }
@@ -63,7 +64,7 @@ impl DetachedStagedTrash {
     pub(super) fn detach_cache_child(&mut self, parent: &Path, path: &Path) -> io::Result<()> {
         let root = staged_root(&self.artifact_dir);
         if path.parent() != Some(parent)
-            || path == self.artifact_dir
+            || self.artifact_dir == path
             || path == root.as_path()
             || path.starts_with(root.join(STAGED_TRASH))
             || path == root.join(super::STORE_LOCK).as_path()
@@ -98,7 +99,7 @@ impl DetachedStagedTrash {
         let destination = trash.join(format!("{}-{nanos}-{id}", std::process::id()));
         // Never overwrite another process's pending trash, even after restart.
         crate::platform::fs::replace::rename_without_replace(path, &destination)?;
-        self.paths.push(destination.into_path_buf());
+        self.paths.push(destination);
         Ok(())
     }
 
@@ -130,7 +131,7 @@ impl DetachedStagedTrash {
             Err(error) => return Err(error),
         }
         for path in self.paths {
-            if path.parent() != Some(trash.as_path()) {
+            if path.as_path().parent() != Some(trash.as_path()) {
                 return Err(invalid_path(&path));
             }
             remove_tree(&path, deadline, &mut report);
@@ -202,7 +203,7 @@ pub(crate) fn sweep_staged_trash_for(
             enumeration_deferred = true;
             break;
         }
-        detached.paths.push(entry?.path());
+        detached.paths.push(entry?.path().into());
     }
     let mut report = detached.sweep_until(deadline)?;
     report.deferred |= enumeration_deferred;

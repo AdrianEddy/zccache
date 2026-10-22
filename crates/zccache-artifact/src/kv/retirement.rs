@@ -2,9 +2,10 @@
 use super::{check_namespace, namespace_gate, KvError, KvResult, KvStore};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
+use zccache_core::path::NormalizedPath;
 
 const RETIRED: &str = ".retired";
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -13,8 +14,8 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 /// recovery work; it never recursively deletes on the dropping thread.
 #[must_use = "sweep retired names outside publication exclusion"]
 pub struct DetachedKvNamespace {
-    root: PathBuf,
-    paths: Vec<PathBuf>,
+    root: NormalizedPath,
+    paths: Vec<NormalizedPath>,
 }
 
 /// Successful unlinks are credited independently from failed/deferred work.
@@ -36,14 +37,12 @@ impl KvStore {
         check_namespace(namespace)?;
         deadline(bound)?;
         let dir = self.namespace_dir(namespace);
-        let root = self.kv_root().join(RETIRED).into_path_buf();
+        let root = self.kv_root().join(RETIRED);
         let mut detached = DetachedKvNamespace {
             root,
             paths: Vec::new(),
         };
-        let _gate = namespace_gate(dir.as_path())
-            .write_for(bound)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate = namespace_gate(dir.as_path()).blocking_write_for(bound);
         match fs::symlink_metadata(dir.as_path()) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(detached),
             Err(error) => return Err(error.into()),
@@ -74,7 +73,7 @@ impl KvStore {
     /// deadline covers enumeration and recursive deletion.
     pub fn sweep_retired_namespaces_for(&self, bound: Duration) -> KvResult<KvSweepReport> {
         let until = deadline(bound)?;
-        let root = self.kv_root().join(RETIRED).into_path_buf();
+        let root = self.kv_root().join(RETIRED);
         match fs::symlink_metadata(&root) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Ok(KvSweepReport::default())
@@ -92,7 +91,7 @@ impl KvStore {
                 deferred = true;
                 break;
             }
-            detached.paths.push(entry?.path());
+            detached.paths.push(entry?.path().into());
         }
         let mut report = detached.sweep_until(until)?;
         report.deferred |= deferred;
@@ -118,7 +117,7 @@ impl DetachedKvNamespace {
             Err(error) => return Err(error.into()),
         }
         for path in self.paths {
-            if path.parent() != Some(self.root.as_path()) {
+            if path.as_path().parent() != Some(self.root.as_path()) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "retired namespace escaped its owner",

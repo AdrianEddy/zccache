@@ -1713,3 +1713,80 @@ Remaining #1964 work:
 - Primary remaining #1964 work: implement/register semantic deny-level Dylint
   with alias/UFCS/function-item and live-guard coverage, typed capabilities as
   needed, cross-OS/features, docs/review/full gate, PR merge and main rebase.
+
+
+### #1964 typed publication and Dylint foundations (2026-10-22)
+
+- Added `ban_sweep_under_exclusion`, registered in workspace discovery,
+  ci/lint.py formatting and the existing ci.yml Dylint job. Cache-footprint and
+  wiring validators pass. No new workflow file. Raw recursive/empty-directory
+  deletion is resolved by DefId, confined to explicit shared sweep/link owners
+  and existing private compiler/lifecycle owners. Capturing a raw function item
+  is forbidden even in an approved owner; direct alias calls resolve normally.
+- Raw alias fixture RED: `/tmp/zccache-1964-dylint-owner-red.log`. Ownership-only
+  production checks passed Linux/Windows/macOS selections before guard analysis
+  was added (`/tmp/zccache-1964-owner-workspace-dylint.log`). Do not mistake that
+  earlier run for validation of the current full guard implementation.
+- Current guard analysis uses compiler MoveData and MaybeInitializedPlaces on
+  promoted MIR, with guard leaves rather than wrapper roots. Copies of MIR omit
+  borrow-checker imaginary edges. The wrapper adds enum discriminant refinement
+  without enabling rustc's experimental precise-enum-drop flag. Fixtures cover
+  partial moves, complete releases, aliased guards and released Result values.
+- MIR findings: mir_built is already stolen during late linting. optimized_mir
+  loses local metadata and contains SetDiscriminant/Deinit unsupported by the
+  borrowck MoveData builder. Promoted MIR works for the sync fixtures, but some
+  production async MIR is already consumed. Current fallback fails closed when
+  it cannot validate a guard; do not suppress this or claim production coverage.
+  Failed development runs are retained in /tmp/zccache-1964-*-guard-workspace.log.
+- The generic core WritePermit also means whole-compile admission; it cannot be
+  treated as publication critical-section ownership. Added actual core
+  PublicationBarrier / PublicationCommitPermit / PublicationDrainPermit facades,
+  with private underlying permits and mandatory Duration on all waits. Async
+  drain_for is distinct from blocking_write_for; shared ReadPermit stays the
+  existing operation lease. Migrated daemon field/construction, maintenance,
+  bounded shutdown/flush return contracts and tests. KV namespace gates now use
+  the publication facade instead of a unit data RwLock held through put I/O.
+- API RED/GREEN: /tmp/zccache-1964-publication-facade-api-{red,green}.log. Runtime:
+  95 daemon regressions pass (/tmp/zccache-1964-publication-facade-runtime.log),
+  30 KV tests pass, with existing allocation-heavy and parent-invoked child
+  fixtures ignored by the outer harness
+  (/tmp/zccache-1964-publication-kv-runtime.log).
+- 10 current UI fixtures pass, including actual core commit rejection and
+  allowed admission/drain/released commit examples
+  (/tmp/zccache-1964-real-publication-ui-green.log). Dependency flag discovery
+  uses Cargo JSON from a bounded soldr child. SpawnSpec 0.1.26 lacks env_remove;
+  helper clear-and-copies inherited environment except IN_SOLDR_PID, preserving
+  the explicit toolchain and default wrapper under CI.
+- Existing ban_std_pathbuf caught the new retirement-token PathBuf fields; both
+  staged and KV tokens now use NormalizedPath. Their runtime regressions pass.
+
+NEXT (still incomplete, do not push/merge #1964):
+1. Give native store EXCLUSIVE commits a distinct sealed capability instead of
+   the same FileLock used by key publication, read leases and lifecycle roots.
+   Artifact staged_lock.rs is the shared daemon/warm owner; its public
+   open_store_lock currently returns a raw File. Audit all consumers before
+   migrating. Keep retained readers valid and the 2s maintenance deadline.
+2. Separate guard effects: short publication/store commit permits forbid slow
+   filesystem work; shared/native operation leases and publication drains
+   forbid shared trash sweeps but allow their intentional operation I/O. Generic
+   core WritePermit admission is NOT a publication commit. Current matcher was
+   updated to PublicationCommitPermit, but native FileLock is still over-broad.
+3. Confine PublicationBarrier::drain_for acquisition to
+   wal::drain_durable_state_for_shutdown and embedded::flush_embedded_state
+   (plus test-only callers); otherwise it bypasses the typed commit policy.
+   Resolve method/function-item DefIds. The current API example calls drain_for
+   as a signature check; adjust that positive fixture when adding owner policy.
+4. Classify actual DetachedStagedTrash / DetachedKvNamespace sweep facades,
+   including UFCS, function items, erased callbacks, local helper/closure effects.
+   Add actual artifact/core dependency UI inputs and accepted after-release cases.
+   Do not rely only on primitive std::fs names. Guard leaks/type erasure also need
+   consideration so ownership moves are not mistaken for physical release.
+5. Resolve consumed MIR without a fail-open path; typed roles should remove
+   admission false positives first. All three OS selections must pass with the
+   final guard implementation, relevant feature/UI/planted violations included.
+6. Tighten raw owner identity to exact impl/type/functions; retain justified
+   distinct private staging owners. Permit only fixed-depth name retirement in
+   short commit owners, not recursive scans hidden in helpers.
+7. Finish docs, clippy/lint, one clud-review invocation, full clean committed gate,
+   separate PR merge, verify issue closed, fetch/switch main/rebase origin/main,
+   clean tree and delete feature branches. Then #1965–1971 sequentially.

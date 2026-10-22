@@ -720,7 +720,7 @@ fn maintain_disk_artifacts(pass: MaintenancePass<'_>) -> io::Result<DiskMaintena
 // has queued (zccache#1775). `None` in tests that don't exercise shutdown.
 fn maintain_disk_artifacts_with_barrier(
     pass: MaintenancePass<'_>,
-    publication_barrier: Option<&Arc<crate::core::sync::Barrier>>,
+    publication_barrier: Option<&Arc<crate::core::sync::PublicationBarrier>>,
     shutdown_requested: Option<&AtomicBool>,
 ) -> io::Result<DiskMaintenanceReport> {
     let MaintenancePass {

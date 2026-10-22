@@ -296,16 +296,16 @@ fn rename_shard(dest: &Path) -> &'static zccache_core::blocking_sync::Mutex<()> 
 /// `NotFound` (#1648). Keyed by the namespace directory, so stores opened
 /// separately over one cache dir share a gate, and puts never exclude each
 /// other.
-fn namespace_gate(dir: &Path) -> &'static zccache_core::blocking_sync::RwLock<()> {
+fn namespace_gate(dir: &Path) -> &'static zccache_core::sync::PublicationBarrier {
     use std::hash::{Hash, Hasher};
 
     const SHARDS: usize = 16;
-    static GATES: std::sync::OnceLock<Vec<zccache_core::blocking_sync::RwLock<()>>> =
+    static GATES: std::sync::OnceLock<Vec<zccache_core::sync::PublicationBarrier>> =
         std::sync::OnceLock::new();
 
     let gates = GATES.get_or_init(|| {
         (0..SHARDS)
-            .map(|_| zccache_core::blocking_sync::RwLock::new(()))
+            .map(|_| zccache_core::sync::PublicationBarrier::new())
             .collect()
     });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -501,9 +501,8 @@ impl KvStore {
         }
         let path = self.value_path(namespace, key);
         let dir = self.namespace_dir(namespace);
-        let _gate = namespace_gate(dir.as_path())
-            .read_for(zccache_core::sync::STATE_TIMEOUT)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate =
+            namespace_gate(dir.as_path()).blocking_read_for(zccache_core::sync::STATE_TIMEOUT);
 
         let mut attempt = 1;
         loop {

@@ -698,7 +698,7 @@ async fn flush_embedded_state(
         Some(
             state
                 .artifact_publication
-                .write_for(crate::core::sync::OPERATION_TIMEOUT)
+                .drain_for(crate::core::sync::OPERATION_TIMEOUT)
                 .await,
         )
     } else {
@@ -706,7 +706,7 @@ async fn flush_embedded_state(
             EMBEDDED_PUBLICATION_BARRIER_TIMEOUT,
             state
                 .artifact_publication
-                .write_for(crate::core::sync::OPERATION_TIMEOUT),
+                .drain_for(crate::core::sync::OPERATION_TIMEOUT),
         )
         .await
         .ok()

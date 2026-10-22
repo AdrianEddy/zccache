@@ -225,7 +225,7 @@ pub(super) struct SharedState {
     pub(super) depgraph_persistence: Arc<Gate>,
     /// Shared by publishers and exclusively owned by maintenance/Clear from
     /// cache-file mutation through index/live-map mutation.
-    pub(super) artifact_publication: Arc<crate::core::sync::Barrier>,
+    pub(super) artifact_publication: Arc<crate::core::sync::PublicationBarrier>,
     /// Reuses one shared OS staged-store lock for all active staged deliveries
     /// in this daemon and cache root. The final lease drop releases it, letting
     /// cross-process maintenance acquire the exclusive lock.

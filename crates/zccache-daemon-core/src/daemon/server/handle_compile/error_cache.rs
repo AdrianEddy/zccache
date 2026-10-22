@@ -292,7 +292,7 @@ mod tests {
                 .unwrap();
         let state = Arc::clone(&server.state);
         let publication_write = Arc::clone(&state.artifact_publication)
-            .write_for(crate::core::sync::OPERATION_TIMEOUT)
+            .drain_for(crate::core::sync::OPERATION_TIMEOUT)
             .await;
         let stdout = Arc::new(Vec::new());
         let stderr = Arc::new(b"cannot find function `missing`".to_vec());
