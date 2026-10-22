@@ -78,6 +78,11 @@ fn function(cx: &LateContext<'_>, definition: DefId, seen: &mut Vec<DefId>) -> u
     ) {
         return 0;
     }
+    // Required trait methods have no MIR body. Their dynamic implementation
+    // cannot be assumed free of cleanup, and querying MIR would ICE rustc.
+    if cx.tcx.hir_maybe_body_owned_by(local).is_none() {
+        return UNKNOWN;
+    }
     // Release the query borrow before following callees: a query for a callee
     // may legitimately advance/consume MIR for an enclosing function.
     let calls = {

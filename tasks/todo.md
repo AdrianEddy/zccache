@@ -1898,3 +1898,10 @@ Remaining enforcement work before #1964 can ship:
   is /tmp/zccache-1964-structural-effects-workspace.log; do not treat UI/runtime
   receipts as proof of complete production enforcement. Remaining enforcement,
   OS/features, review/full gate and merge/main cleanup requirements above apply.
+- Production probe exposed an ICE when effect traversal queried MIR for a
+  required trait method with no body. Added hir_maybe_body_owned_by guard;
+  bodyless dynamic methods conservatively carry UNKNOWN effects. New actual
+  dependency abstract_effect fixture diagnoses the call instead of crashing;
+  all 19 fixtures pass (/tmp/zccache-1964-abstract-effect-final.log).
+  Previous production probe remains RED; reader callback analysis and production
+  enforcement are not yet complete.
