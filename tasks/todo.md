@@ -2187,3 +2187,11 @@ Still required before #1964 can land:
 - Added custom Ready Future owning Cleanup to `drop_future`: verified actual diagnostic at await, inspected expected stderr. Added free `poll` call to approved drain positive fixture. Final conservative proof + both boundaries pass all 36 fixtures in `/tmp/zccache-1964-completion-boundaries.log` (terminal 0). Format and diff check pass.
 - Production probe `/tmp/zccache-1964-completion-workspace.log` terminal 1, 47 diagnostics, no ICE. This snapshot preceded the final conservative invalidation/free-poll hardening. New saved-local/opaque cancellation checks expose additional drop paths; workspace is not green. Owned handoffs, opaque state drops, transitive completed-future summaries, and cancellation glue inside a future retaining guards still need work; do not treat UI coverage as complete enforcement or a full gate.
 - No push/PR. Continue #1964 before later children.
+
+### #1964 instantiated ownership escape prevention
+- Planted generic `forget_value<T>` consuming a concrete PublicationReadPermit; prior direct-HIR-only checks missed it. RED `/tmp/zccache-1964-generic-escape-red.log`; GREEN `/tmp/zccache-1964-generic-escape-green.log`.
+- Planted generic `erase_value<T: Any>` returning Box<dyn Any>; prior summary missed the instantiated ownership-erasing unsize. RED `/tmp/zccache-1964-generic-erasure-red.log`; GREEN `/tmp/zccache-1964-generic-erasure-green.log`.
+- Shared resolved leak predicate between HIR and instantiated effects. ESCAPE effects propagate through local generic helper summaries. MIR casts retain source/destination types and are checked after generic substitution. Direct HIR diagnostics are not duplicated.
+- Added positive generic forget/erasure of PhantomData<PublicationReadPermit> while a real permit is held; ownership is not inferred from the marker's type argument.
+- Final sequential-after-format validation: `/tmp/zccache-1964-instantiated-escape-verified.log` terminal 0, 7 base + 30 actual-dependency examples pass. Format and git diff checks pass. README now accurately distinguishes current capabilities from remaining #1964 work.
+- These changes do not resolve the existing production RED (latest prior probe 47 diagnostics) or establish complete transfer/cancellation/lane enforcement. No push/PR; continue #1964.

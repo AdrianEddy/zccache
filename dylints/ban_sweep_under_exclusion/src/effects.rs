@@ -6,6 +6,7 @@ use rustc_middle::{mir, ty};
 pub(super) const BULK: u8 = 1;
 pub(super) const SWEEP: u8 = 2;
 pub(super) const UNKNOWN: u8 = 4;
+pub(super) const ESCAPE: u8 = 8;
 
 pub(super) fn call<'tcx>(
     cx: &LateContext<'tcx>,
@@ -59,6 +60,9 @@ fn function<'tcx>(
         let path = cx.get_def_path(definition);
         let name = path.last().map(|name| name.as_str()).unwrap_or("");
         let krate = cx.tcx.crate_name(definition.krate);
+        if super::guard_escapes::leaks(cx, ty::Ty::new_fn_def(cx.tcx, definition, arguments)) {
+            return ESCAPE;
+        }
         if matches!(krate.as_str(), "core" | "std")
             && super::canonical_path(cx, definition) == "core::mem::drop"
         {
@@ -134,6 +138,12 @@ fn function<'tcx>(
             }
         };
         calls.into_iter().fold(0, |effects, target| {
+            if let Target::Erase(source, destination) = target {
+                let source = ty::EarlyBinder::bind(source).instantiate(cx.tcx, arguments).skip_norm_wip();
+                let destination = ty::EarlyBinder::bind(destination).instantiate(cx.tcx, arguments).skip_norm_wip();
+                let owns = |value| super::guard_types::contains(cx, value, super::guard_types::Scope::Any, &mut Vec::new());
+                return effects | if owns(source) && !owns(destination) { ESCAPE } else { 0 };
+            }
             // Only this sealed cursor's direct one-level directory open is
             // metadata work. Every other effect in its body/helper graph
             // remains subject to the normal exclusion policy.
@@ -145,6 +155,7 @@ fn function<'tcx>(
             let (value, dropping) = match target {
                 Target::Call(value) => (value, false),
                 Target::Drop(value) => (value, true),
+                Target::Erase(..) => unreachable!(),
             };
             let value = ty::EarlyBinder::bind(value)
                 .instantiate(cx.tcx, arguments)
@@ -161,6 +172,7 @@ fn function<'tcx>(
 enum Target<'tcx> {
     Call(ty::Ty<'tcx>),
     Drop(ty::Ty<'tcx>),
+    Erase(ty::Ty<'tcx>, ty::Ty<'tcx>),
 }
 fn targets<'tcx>(
     cx: &LateContext<'tcx>,
@@ -174,7 +186,7 @@ fn targets<'tcx>(
     if !precise {
         // Optimized MIR already has real drop elaboration. Do not feed its
         // Deinit/SetDiscriminant statements into pre-borrowck MoveData.
-        return owned
+        let mut targets: Vec<_> = owned
             .basic_blocks
             .iter()
             .filter_map(|block| match &block.terminator().kind {
@@ -187,6 +199,8 @@ fn targets<'tcx>(
                 _ => None,
             })
             .collect();
+        targets.extend(casts(cx, &owned));
+        return targets;
     }
     for block in owned.basic_blocks.as_mut() {
         if let Some(terminator) = &mut block.terminator {
@@ -228,7 +242,27 @@ fn targets<'tcx>(
             _ => {}
         }
     }
+    result.extend(casts(cx, body));
     result
+}
+
+fn casts<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<Target<'tcx>> {
+    body.basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| {
+            let mir::StatementKind::Assign(assignment) = &statement.kind else {
+                return None;
+            };
+            let mir::Rvalue::Cast(_, operand, destination) = &assignment.1 else {
+                return None;
+            };
+            Some(Target::Erase(
+                operand.ty(&body.local_decls, cx.tcx),
+                *destination,
+            ))
+        })
+        .collect()
 }
 
 pub(super) fn drop_value<'tcx>(

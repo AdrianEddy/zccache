@@ -10,7 +10,15 @@ Guard analysis uses compiler move initialization, guard field paths and actual
 control-flow edges, with enum variant refinement. The compiler fixtures cover
 aliases, partial moves, released wrappers and real core publication roles.
 
+Instantiated helper summaries propagate ownership leaks and ownership-erasing
+casts, including generic `forget` and `Box<dyn Any>` helpers. Non-owning markers
+do not acquire ownership merely by naming a permit type. Coroutine cancellation
+includes captured and saved-local destructors; a direct coroutine drop following
+a proven `Poll::Ready` uses a separate completion proof. Custom futures retain
+their destructor effects after `Ready`.
+
 The core publication facade distinguishes blocking commit permits from complete
-admission operations and async checkpoint/shutdown drains. Typed native store
-commits, drain capability placement, sweep facade effects, transitive helper and
-callback checks, consumed async MIR and final cross-OS checks remain unfinished.
+admission operations and async checkpoint/shutdown drains. The workspace gate
+still fails on owned task transfers and opaque drop effects. Cancellation glue
+with retained guards, blocking-lane enforcement, the remaining ownership audit,
+and final OS/feature checks remain unfinished.

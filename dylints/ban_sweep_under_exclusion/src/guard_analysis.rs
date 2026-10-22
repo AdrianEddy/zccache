@@ -174,7 +174,19 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             }
             _ => continue,
         };
-        let index = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
+        // Direct resolved leak symbols already receive the HIR diagnostic.
+        // Instantiated helper summaries still need the caller's guard state.
+        if effects == super::effects::ESCAPE {
+            if let mir::TerminatorKind::Call { func, .. } = &terminator.kind {
+                if super::guard_escapes::leaks(cx, func.ty(&body.local_decls, cx.tcx)) {
+                    continue;
+                }
+            }
+        }
+        let index = if effects
+            & (super::effects::SWEEP | super::effects::UNKNOWN | super::effects::ESCAPE)
+            != 0
+        {
             1
         } else if effects & super::effects::BULK != 0 {
             0
@@ -189,7 +201,11 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             super::emit(
                 cx,
                 terminator.source_info.span,
-                "slow filesystem work retains publication or store exclusion",
+                if effects & super::effects::ESCAPE != 0 {
+                    "exclusion ownership must not be leaked or erased"
+                } else {
+                    "slow filesystem work retains publication or store exclusion"
+                },
             );
         }
     }

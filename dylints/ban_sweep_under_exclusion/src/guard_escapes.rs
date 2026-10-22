@@ -26,7 +26,18 @@ pub(super) fn check<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
         }
         _ => false,
     };
-    let leaking = if let ty::FnDef(definition, arguments) = source.kind() {
+    let leaking = leaks(cx, source);
+    if erased || cast_erased || leaking {
+        super::emit(
+            cx,
+            expr.span,
+            "exclusion ownership must not be leaked or erased",
+        );
+    }
+}
+
+pub(super) fn leaks<'tcx>(cx: &LateContext<'tcx>, source: ty::Ty<'tcx>) -> bool {
+    if let ty::FnDef(definition, arguments) = source.kind() {
         let path = cx.get_def_path(*definition);
         let name = path.last().map(|name| name.as_str()).unwrap_or("");
         matches!(
@@ -43,13 +54,6 @@ pub(super) fn check<'tcx>(cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
             && arguments.types().any(|value| owns(cx, value))
     } else {
         false
-    };
-    if erased || cast_erased || leaking {
-        super::emit(
-            cx,
-            expr.span,
-            "exclusion ownership must not be leaked or erased",
-        );
     }
 }
 
