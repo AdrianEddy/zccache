@@ -2160,3 +2160,9 @@ Still required before #1964 can land:
 - Production green, supported OS/features and planted violations, final docs,
   clippy, one clud-review, clean committed full gate, PR merge/main rebase and
   branch cleanup remain outstanding. Then continue #1965–1971 sequentially.
+
+### #1964 future-capture cancellation checkpoint
+- Added `drop_future` compiler fixture: cancelling an unpolled future with a captured recursive-cleanup destructor under publication exclusion must fail; releasing exclusion first must pass.
+- Verified RED: `/tmp/zccache-1964-future-drop-red.log` (missing expected diagnostic, exit 101).
+- Effects now include coroutine upvar destructors. GREEN: `/tmp/zccache-1964-future-drop-green.log`, all 36 compiler fixtures pass (7 base + 29 examples).
+- This covers captured values only, not saved locals created after polling; generated cancellation glue/saved-local coverage remains required. Production lint remains unresolved at checked ownership handoffs/opaque drops. No push or PR yet.

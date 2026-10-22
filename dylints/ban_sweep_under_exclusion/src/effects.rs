@@ -294,6 +294,15 @@ pub(super) fn drop_value<'tcx>(
             .fold(0, |effects, field| {
                 effects | drop_value(cx, field, summaries, active)
             }),
+        // An unpolled future already owns its captures. Cancelling it drops
+        // those values even though none of its body has executed.
+        ty::Coroutine(_, arguments) => arguments
+            .as_coroutine()
+            .upvar_tys()
+            .iter()
+            .fold(0, |effects, field| {
+                effects | drop_value(cx, field, summaries, active)
+            }),
         ty::Array(field, _) | ty::Slice(field) => drop_value(cx, *field, summaries, active),
         ty::Dynamic(..) | ty::Param(..) => UNKNOWN,
         _ => 0,
