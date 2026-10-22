@@ -4014,6 +4014,7 @@ name = "zccache-compile-trace"
 version = "1.15.6"
 dependencies = [
  "zccache-audit",
+ "zccache-core",
 ]
 
 [[package]]
@@ -4040,6 +4041,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

@@ -22,6 +22,7 @@ Architecture docs are split by subsystem. Read only what's relevant to your curr
 | `zccache-compiler` | [overview.md](architecture/overview.md) (2.9), [data-flow.md](architecture/data-flow.md) |
 | Nested Dylint compiler caching | [data-flow.md](architecture/data-flow.md#nested-dylint-driver-caching) |
 | `zccache-core` | [overview.md](architecture/overview.md) |
+| Async state, lock/wait budgets and deadlock prevention | [runtime.md](architecture/runtime.md#bounded-synchronization-and-async-state) |
 | Embedded host-daemon integration | [embedded-service.md](architecture/embedded-service.md) |
 | Embedded maintenance limits and shutdown | [embedded-service.md](architecture/embedded-service.md#maintenance-limits-and-task-ownership) |
 | Embedded bring-up timing and warm-state persistence (#1652) | [embedded-service.md](architecture/embedded-service.md#bring-up-and-warm-state-1652) |

@@ -38,6 +38,12 @@ zccache is a local-first compiler cache (23 crates) for C/C++/Rust/Emscripten, i
 - **Put every new pull-request test in `.github/workflows/ci.yml`**, either as a CI job or in a reusable workflow called by CI. Do not create a new PR-triggered GitHub Actions workflow/category for a test. Preserve docs-only checks when changing CI path filters; existing standalone PR workflows are being consolidated in #1639.
 - Every directory with files must have a README.md (enforced by hook)
 
+## Blocking and waiting policy
+
+- Blocking synchronization and wait APIs require an explicit `Duration`; do not expose an optional timeout or an unbounded overload. Use `zccache_core::wait` and `blocking_sync`.
+- Async shared data belongs in `zccache_core::sync::State` synchronous callbacks. Data guards must never cross an await; blocking operations belong on the blocking lane.
+- A timeout argument bounds acquisition, not arbitrary callback execution or a kernel filesystem syscall. Service lifecycle listeners and cancellation-driven loops need an explicit owner and shutdown path; they are not proof that every async wait is bounded.
+
 ## Commands
 
 ```bash

@@ -806,7 +806,7 @@ async fn semantic_session_admission_holds_materialization_lock_through_native_sp
     let entered = admission_entered.clone();
     let admission = kernal_api::SpawnAdmission::new(move || {
         entered.store(true, Ordering::SeqCst);
-        Ok::<_, std::io::Error>(crate::daemon::spawn_exclusion::spawn_shared())
+        Ok::<_, std::io::Error>(crate::daemon::spawn_exclusion::test_spawn_shared())
     });
     let start = kernal_api::async_engine::launch(async move {
         builder
