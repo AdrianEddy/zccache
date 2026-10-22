@@ -1463,3 +1463,9 @@ duplicate OS leases. Opaque permits now retain the outer gate owner; a separate
 data-free initialization gate coalesces staged leases outside the state mutex.
 The weak-owner test failed before the repair; core synchronization tests and
 both unchanged integration assertions pass afterward. Full gate rerun pending.
+
+The correction gate passed all five non-integration lanes. Integration setup
+repeatedly failed before tests on GitHub anonymous latest-release rate limits.
+Pin setup-uv in the existing CI/integration workflows to verified uv 0.12.13
+(the host version), removing the latest-release lookup without skipping tests.
+Rerun the gate for the changed tree before publication.

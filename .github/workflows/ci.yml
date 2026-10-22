@@ -104,6 +104,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Avoid the anonymous latest-release API lookup in isolated replay.
+          version: "0.12.13"
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
       - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
@@ -143,6 +146,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Avoid the anonymous latest-release API lookup in isolated replay.
+          version: "0.12.13"
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
       - id: setup-soldr
