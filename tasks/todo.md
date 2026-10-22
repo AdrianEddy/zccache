@@ -1431,7 +1431,7 @@ next child, then sync/rebase against origin/main and leave a clean tree.
 
 - [x] #1961 bounded state/probe facade migration: merged PR #1972; full six-lane gate passed. Synced/rebased main to origin/main (25d71f09), clean tree before #1962.
 - [x] #1962 holder watchdog and diagnostics: merged PR #1973 after all six gate lanes passed (1,394s); rebased clean main to origin/main 0fb36402.
-- [ ] #1963 bounded generic process liveness.
+- [x] #1963 bounded generic process liveness (merged PR #1974).
 - [ ] #1964 detach staged deletion from publication exclusion.
 - [ ] #1965 durable-entry payload demotion.
 - [ ] #1966 default eligible native/link/exec staging.
@@ -1559,3 +1559,19 @@ public fault value is injected after child readiness, not claimed as an OS
 pipe-failure reproduction. Workspace Clippy (cli + download-daemon) passes.
 Dylint passed all supported OS selections; final matcher additions covering
 native kernal foreground/sync APIs are included in UI and the full gate.
+
+## #1964 implementation plan
+
+- [x] RED: both maintenance and Clear paused recursive deletion block a real unrelated publisher; workers are resumed/drained before assertions. Evidence: /tmp/zccache-1964-sweep-red.log (2 expected failures).
+- [ ] Introduce typed detach/sweep ownership; rename to private restart-safe trash under short exclusion, sweep on the blocking lane after release.
+- [ ] Cover generation replacement, retained readers, retries/crash recovery, correct reclaimed-byte accounting, symlink/reparse refusal, two-second maintenance deferral and bounded Clear acquisition.
+- [ ] Include publication rollback/conflict/invalid-generation recursive cleanup, which remains under store exclusion beyond the producer's maintenance patch.
+- [ ] Add resolved-symbol deny-level Dylint for destructive sweep capabilities and slow filesystem work under publication/store guards; real negative/positive alias/UFCS/function-item fixtures.
+- [ ] Update docs; run focused tests, one local review and clean-tree full gate, merge separate PR; rebase main to origin/main and delete feature branch.
+
+#1963 completed: PR #1974 merged as adf2c5e1300b16662261700af5e4f99fe347bc96;
+issue closed. All six gate lanes passed in 1,618s, including 52 strict PCH
+regressions and 3,661 main tests, final normal-wrapper Dylint on three OS
+selections and planted violations. Attested head `7cb7a78a80bf`, tree `cef40a9e0946`.
+Local review clean; ten focused liveness cases rerun independently. Main was
+rebased to origin/main (0/0), verified clean, and feature branches removed.

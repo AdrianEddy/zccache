@@ -15,6 +15,7 @@ pub(in crate::daemon::server) enum StagedHookPoint {
     MaterializePublish,
     MaintenanceStoreLockPending,
     MaterializationStoreLockPending,
+    TreeSweep,
 }
 
 struct ActiveHook {
@@ -39,6 +40,11 @@ pub(in crate::daemon::server) struct StagedHookGuard {
 }
 
 impl StagedHookGuard {
+    pub(in crate::daemon::server) fn wait_until_reached_for(&self, timeout: std::time::Duration) {
+        crate::core::wait::recv_for(&self.reached, timeout)
+            .expect("staged operation did not reach its pause point within the test budget");
+    }
+
     pub(in crate::daemon::server) fn arm(scope: &Path, point: StagedHookPoint) -> Self {
         let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
         let (reached_tx, reached) = mpsc::sync_channel(1);

@@ -207,6 +207,8 @@ fn evict_staged_artifact_keys_locked(
 }
 
 pub(super) fn remove_staged_tree(path: &Path) -> io::Result<u64> {
+    #[cfg(test)]
+    super::hook::pause(path, super::StagedHookPoint::TreeSweep);
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -251,6 +253,10 @@ pub(in crate::daemon::server) fn clear_staged_artifacts(artifact_dir: &Path) -> 
     }
     Ok(bytes_removed)
 }
+
+#[cfg(test)]
+#[path = "sweep_tests.rs"]
+mod sweep_tests;
 
 #[cfg(test)]
 mod bounded_lock_tests {
