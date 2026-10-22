@@ -357,3 +357,7 @@ only separately owned data-free operation permits may survive suspension.
 - Borrow delivery payloads from an owned cache-record clone so Rust keeps private cleanup ownership alive through native lease teardown. An empty Drop can enforce the destruction boundary; compiler fixtures must exercise both later access and implicit destruction after the last access.
 - Separate publication from the owned record before output copying, with explicit safe declaration/drop order. Use a real private-type compiler bridge plus a passing access control; a private-import failure cannot prove the lifetime contract.
 - Paused-sweep publication regressions should report native lock availability separately from full publisher completion. Retain failing timing receipts and existing deadlines when diagnosing intermittent failures.
+
+### Pre-elaboration drops and downstream ownership checks (#1964)
+- A moved-value drop may be impossible to execute while still present in compiler MIR. Its impossible unwind edge can contaminate later guard state even when the lint skips checking the drop itself. Prune only drops proven empty by initialization/drop requirements on a private MIR clone, and retain a negative fixture with a real destructor after a partial move.
+- Validate the proposed precision change against a minimal positive and real negative. Discard broader analysis changes when the control already passes without them; do not classify an unsupported helper-transfer shape as a false-positive regression.

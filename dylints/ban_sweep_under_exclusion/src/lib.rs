@@ -10,6 +10,7 @@ mod blocking_transfer;
 mod checked_transfer;
 mod cleanup_owners;
 mod completed_future;
+mod dead_drop_edges;
 mod detach_policy;
 mod drop_paths;
 mod drop_variants;

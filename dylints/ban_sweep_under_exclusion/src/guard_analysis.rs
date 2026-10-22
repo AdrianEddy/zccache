@@ -77,6 +77,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         ));
     }
     owned.basic_blocks.as_mut().push(declarations);
+    super::dead_drop_edges::prune(cx, &mut owned, frame);
     let body = &owned;
     let data = MoveData::gather_moves(body, cx.tcx, |_| true);
     let mut sets = Vec::new();

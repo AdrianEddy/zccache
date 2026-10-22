@@ -15,6 +15,11 @@ aliases, partial moves, released wrappers and real core publication roles.
 Drop effects also follow uniquely initialized enum values through aggregate
 fields and whole-value moves. Arguments, ambiguous writes, pointer/reference
 aliases and unsupported projections do not establish a known-variant proof.
+On its private MIR clone, guard analysis removes drop edges only when compiler
+initialization proves that no initialized field requires destruction. This
+prevents fully moved temporaries from creating impossible unwind paths. Live
+custom destructors and partially moved values with remaining drop fields keep
+their unwind edges; the compiler's original MIR is never changed.
 
 Instantiated helper summaries propagate ownership leaks and ownership-erasing
 casts, including generic `forget` and `Box<dyn Any>` helpers. Non-owning markers
