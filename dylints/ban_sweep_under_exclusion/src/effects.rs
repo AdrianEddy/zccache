@@ -64,7 +64,11 @@ fn function<'tcx>(
             return ESCAPE;
         }
         if matches!(krate.as_str(), "core" | "std")
-            && super::canonical_path(cx, definition) == "core::mem::drop"
+            && (super::canonical_path(cx, definition) == "core::mem::drop"
+                || name == "drop_in_place" && path.iter().any(|part| part.as_str() == "ptr")
+                || name == "drop" && path.iter().any(|part| part.as_str() == "ManuallyDrop")
+                || name == "assume_init_drop"
+                    && path.iter().any(|part| part.as_str() == "MaybeUninit"))
         {
             return arguments
                 .types()

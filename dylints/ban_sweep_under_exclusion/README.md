@@ -45,6 +45,9 @@ wrappers still do not establish an automatic release proof.
 The same proof applies to a moved value passed to resolved `core::mem::drop`,
 including aliases and function items. Borrowed values and unknown function
 pointers do not establish ownership transfer.
+Resolved `ptr::drop_in_place`, `ManuallyDrop::drop`, and
+`MaybeUninit::assume_init_drop` propagate the destroyed type's cleanup effects.
+They do not establish a moved-owner release proof for the caller's guards.
 
 The core publication facade distinguishes blocking commit permits from complete
 admission operations and async checkpoint/shutdown drains. The workspace gate
