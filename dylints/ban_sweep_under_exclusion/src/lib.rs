@@ -18,6 +18,7 @@ mod guard_analysis;
 mod guard_escapes;
 mod guard_initialization;
 mod guard_types;
+mod ordered_drop;
 mod runtime_mir;
 extern crate rustc_span;
 

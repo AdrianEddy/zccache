@@ -136,7 +136,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             );
             continue;
         }
-        // A whole closure drop releases captures in field order. Its own
+        // Automatic destruction releases owned fields in declaration order. Its own
         // first guard must not be counted through later capture destruction.
         // Any borrowed or separately held guard still prevents this proof.
         if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {
@@ -151,7 +151,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             if all_inside
                 && [Scope::Critical, Scope::Any]
                     .into_iter()
-                    .all(|scope| super::blocking_transfer::cancellation_safe(cx, value, scope))
+                    .all(|scope| super::ordered_drop::safe(cx, value, scope))
             {
                 continue;
             }

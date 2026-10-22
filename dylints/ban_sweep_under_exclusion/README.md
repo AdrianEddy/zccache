@@ -35,6 +35,14 @@ Option/Result/tuple wrappers have release proofs; shared or manually suppressed
 owners do not. The invoked closure body is still checked independently, and
 other caller-held guards remain live. Async task launches have no such contract.
 
+Automatic struct/tuple/enum destruction uses declared field order when every
+live owned guard belongs to the dropped value. Each possible variant must
+release its guards before cleanup; application custom destructors and borrowed
+or separately held guards retain normal checks. The exact private staged
+materialization lease facade has a reader role at its boundary; each lease
+holder is tracked without claiming that no other reader exists. Generic shared
+wrappers still do not establish an automatic release proof.
+
 The core publication facade distinguishes blocking commit permits from complete
 admission operations and async checkpoint/shutdown drains. The workspace gate
 still fails on owned task transfers and opaque drop effects. Cancellation glue

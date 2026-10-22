@@ -49,65 +49,11 @@ pub(super) fn moves<'tcx>(
     vec![place]
 }
 
-/// Capture fields have compiler-defined drop order, including unwind before
-/// the body has moved them into locals. This never treats custom Drop as safe.
+/// Checked closure captures use the same automatic drop-order proof as owners.
 pub(super) fn cancellation_safe<'tcx>(
     cx: &LateContext<'tcx>,
     value: ty::Ty<'tcx>,
     scope: Scope,
 ) -> bool {
-    let ty::Closure(_, arguments) = *value.kind() else {
-        return false;
-    };
-    let fields = arguments.as_closure().upvar_tys();
-    let owns = |field| super::guard_types::contains(cx, field, scope, &mut Vec::new());
-    let mut held = fields.iter().filter(|field| owns(*field)).count();
-    for field in fields {
-        if held != 0 {
-            let effects = super::effects::drop_value(cx, field, &mut Vec::new(), &mut Vec::new());
-            let forbidden = super::effects::SWEEP
-                | super::effects::UNKNOWN
-                | super::effects::ESCAPE
-                | if scope == Scope::Critical {
-                    super::effects::BULK
-                } else {
-                    0
-                };
-            if effects & forbidden != 0 {
-                return false;
-            }
-        }
-        if owns(field) {
-            if !releases(cx, field, scope) {
-                return false;
-            }
-            held -= 1;
-        }
-    }
-    true
-}
-
-fn releases<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope) -> bool {
-    if !super::guard_types::contains(cx, value, scope, &mut Vec::new()) {
-        return true;
-    }
-    match value.kind() {
-        ty::Adt(definition, _) if super::guard_types::direct(cx, definition.did()).is_some() => {
-            true
-        }
-        ty::Tuple(fields) => fields.iter().all(|field| releases(cx, field, scope)),
-        ty::Adt(definition, arguments)
-            if matches!(
-                super::canonical_path(cx, definition.did()).as_str(),
-                "core::option::Option" | "core::result::Result"
-            ) =>
-        {
-            definition
-                .all_fields()
-                .all(|field| releases(cx, field.ty(cx.tcx, arguments).skip_norm_wip(), scope))
-        }
-        // Arc need not release the last owner; ManuallyDrop never releases it.
-        // Other wrapper destructors require their own release proof.
-        _ => false,
-    }
+    matches!(value.kind(), ty::Closure(..)) && super::ordered_drop::safe(cx, value, scope)
 }

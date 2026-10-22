@@ -11,6 +11,9 @@ pub(super) enum Scope {
 pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId) -> Option<Scope> {
     let name = cx.tcx.item_name(definition);
     let krate = cx.tcx.crate_name(definition.krate);
+    if super::canonical_path(cx, definition) == "zccache_daemon_core::daemon::server::persist::staged_store::read_guard::StagedMaterializationGuard" {
+        return Some(Scope::Any);
+    }
     match krate.as_str() {
         "zccache_daemon_core"
             if name.as_str() == "MaterializationPermit"
