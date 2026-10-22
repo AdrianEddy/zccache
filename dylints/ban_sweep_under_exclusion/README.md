@@ -9,6 +9,12 @@ Raw recursive deletion has sweep effects even inside approved private cleanup
 owners. Publication readers and materialization exclusion permit bulk copying;
 recursive deletion is forbidden while either remains held.
 
+The separate ownership role includes `CacheRootWriterLease`. Resolved leaks,
+generic ownership erasure and raw overwrites of that capability are rejected.
+It can span an async admission wait and owned blocking cleanup. Its role adds
+no publication/store critical section, and the existing opaque staging-root
+boundary is preserved for ownership analysis.
+
 Guard analysis uses compiler move initialization, guard field paths and actual
 control-flow edges, with enum variant refinement. The compiler fixtures cover
 aliases, partial moves, released wrappers and real core publication roles.

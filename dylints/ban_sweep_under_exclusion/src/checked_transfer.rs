@@ -42,7 +42,7 @@ pub(super) fn moves<'tcx>(
     // Returning guard ownership requires a separate proof at the destination.
     // Do not treat opaque/generic outputs as an implicit release contract.
     if !known_output(cx, actual.output(), &mut Vec::new())
-        || super::guard_types::contains(cx, actual.output(), Scope::Any, &mut Vec::new())
+        || super::guard_types::contains(cx, actual.output(), Scope::Ownership, &mut Vec::new())
     {
         return Vec::new();
     }

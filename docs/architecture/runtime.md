@@ -160,6 +160,16 @@ paths additionally keep their shared native store lease until delivery finishes.
 Compiler contract fixtures exercise early owner drops and correct release order;
 isolated runtime regressions cover retained readers, replacement, Clear and eviction.
 
+Direct-exec persistence transfers publication to its owned task before scheduling
+displaced-record destruction on the blocking lane. Persistence admission has a
+mandatory duration budget. Expiry releases publication while capacity remains
+unavailable; private cleanup proceeds independently of the async caller.
+Each of these jobs retains a `CacheRootWriterLease`. Server release closes new
+root leases, and outstanding jobs retain the native writer claim through actual
+completion. The lease carries filesystem ownership across waits and cleanup;
+its destruction releases the claim without recursively dropping cache state.
+The wait budget does not interrupt an individual filesystem syscall.
+
 ### Soldr fixes audited (2026-09-01 through 2026-10-21)
 
 | PR | Status | Relevance here |

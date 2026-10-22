@@ -149,7 +149,7 @@ fn function<'tcx>(
             if let Target::Erase(source, destination) = target {
                 let source = ty::EarlyBinder::bind(source).instantiate(cx.tcx, arguments).skip_norm_wip();
                 let destination = ty::EarlyBinder::bind(destination).instantiate(cx.tcx, arguments).skip_norm_wip();
-                let owns = |value| super::guard_types::contains(cx, value, super::guard_types::Scope::Any, &mut Vec::new());
+                let owns = |value| super::guard_types::contains(cx, value, super::guard_types::Scope::Ownership, &mut Vec::new());
                 return effects | if owns(source) && !owns(destination) { ESCAPE } else { 0 };
             }
             // Only this sealed cursor's direct one-level directory open is

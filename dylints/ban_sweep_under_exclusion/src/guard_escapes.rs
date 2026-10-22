@@ -65,5 +65,5 @@ pub(super) fn leaks<'tcx>(cx: &LateContext<'tcx>, source: ty::Ty<'tcx>) -> bool 
 }
 
 fn owns<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>) -> bool {
-    contains(cx, value, Scope::Any, &mut Vec::new())
+    contains(cx, value, Scope::Ownership, &mut Vec::new())
 }

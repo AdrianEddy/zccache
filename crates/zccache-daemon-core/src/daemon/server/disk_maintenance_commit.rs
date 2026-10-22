@@ -7,16 +7,21 @@ pub(super) struct RemovalCommit {
     pub(super) legacy_reclaimed_bytes: u64,
 }
 
+pub(super) struct RemovalSelection<'a> {
+    pub(super) scanned: &'a [DiskArtifact],
+    pub(super) plan: &'a MaintenancePlan,
+}
+
 pub(super) fn remove_planned_artifacts(
     artifact_dir: &Path,
-    scanned: &[DiskArtifact],
-    plan: &MaintenancePlan,
+    selection: RemovalSelection<'_>,
     artifacts: &DashMap<String, CachedArtifact>,
     artifact_store: &ArtifactStore,
     index_writer_tx: Option<&kernal_api::async_engine::UnboundedSender<IndexWriterCommand>>,
     dep_graph: &DepGraph,
     retired_artifacts: &mut Vec<CachedArtifact>,
 ) -> io::Result<RemovalCommit> {
+    let RemovalSelection { scanned, plan } = selection;
     let planned: HashSet<&str> = plan.selected.iter().map(String::as_str).collect();
     let staged_expected: HashMap<String, Option<String>> = scanned
         .iter()

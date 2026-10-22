@@ -112,7 +112,14 @@ async fn detached_exec_handoff_does_not_reacquire_behind_queued_clear() {
     let publisher_state = Arc::clone(&server.state);
     let publisher_gate = Arc::clone(&gate);
     let mut publisher = tokio::spawn(async move {
-        store_exec_artifact_with_handoff_gate(&publisher_state, key, artifact, publisher_gate).await
+        store_exec_artifact_with_handoff_gate(
+            &publisher_state,
+            key,
+            artifact,
+            publisher_gate,
+            crate::core::sync::OPERATION_TIMEOUT,
+        )
+        .await
     });
     gate.wait_until_acquired().await;
 
@@ -581,4 +588,44 @@ fn exact_exec_disabled_lane_has_stable_reason() {
         ),
         StagedPlanOutcome::Unsupported(StagedPlanReason::LaneDisabled)
     ));
+}
+
+#[tokio::test]
+async fn direct_exec_persistence_admission_deadline_releases_publication() {
+    crate::test_support::test_timeout(async {
+        let directory = tempfile::tempdir().unwrap();
+        let server = crate::daemon::server::tests::bind_isolated_server(directory.path());
+        let permits = Arc::clone(&server.state.persist_semaphore)
+            .acquire_many_owned(server.state.persist_semaphore.available_permits() as u32)
+            .await.unwrap();
+        let gate = PublicationHandoffGate::new();
+        let publisher_state = Arc::clone(&server.state);
+        let publisher_gate = Arc::clone(&gate);
+        let publisher = tokio::spawn(async move {
+            store_exec_artifact_with_handoff_gate(
+                &publisher_state, "d".repeat(64),
+                ArtifactData {
+                    outputs: vec![ArtifactOutput {
+                        name: "deadline.bin".into(),
+                        payload: ArtifactPayload::Bytes(Arc::new(b"deadline".to_vec())),
+                    }],
+                    stdout: Arc::new(Vec::new()), stderr: Arc::new(Vec::new()), exit_code: 0,
+                },
+                publisher_gate, Duration::from_millis(5),
+            ).await.unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(5), gate.wait_until_acquired()).await.unwrap();
+        gate.resume();
+        tokio::time::timeout(Duration::from_secs(5), publisher).await.unwrap().unwrap();
+        let writer = tokio::time::timeout(Duration::from_secs(1),
+            server.state.artifact_publication.drain_for(Duration::from_secs(5)),
+        ).await;
+        let deadline_released_publication = writer.is_ok();
+        drop(writer);
+        // Drain the baseline too: a failed assertion must leave no queued writer.
+        drop(permits);
+        tokio::time::timeout(Duration::from_secs(5), gate.wait_until_persisted()).await.unwrap();
+        assert!(deadline_released_publication,
+            "expired direct exec admission retained publication while capacity remained unavailable");
+    }).await;
 }

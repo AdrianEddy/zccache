@@ -15,7 +15,7 @@ use journals::release_reaped_session_journals;
 mod commit;
 #[path = "disk_maintenance_runtime.rs"]
 mod runtime;
-use commit::remove_planned_artifacts;
+use commit::{remove_planned_artifacts, RemovalSelection};
 #[cfg(test)]
 use runtime::*;
 pub(super) use runtime::{
@@ -849,8 +849,10 @@ fn maintain_disk_artifacts_with_barrier(
             );
             let removed = remove_planned_artifacts(
                 artifact_dir,
-                &scanned,
-                &commit_plan,
+                RemovalSelection {
+                    scanned: &scanned,
+                    plan: &commit_plan,
+                },
                 artifacts,
                 artifact_store,
                 index_writer_tx,
@@ -861,8 +863,10 @@ fn maintain_disk_artifacts_with_barrier(
         } else {
             let removed = remove_planned_artifacts(
                 artifact_dir,
-                &scanned,
-                &plan,
+                RemovalSelection {
+                    scanned: &scanned,
+                    plan: &plan,
+                },
                 artifacts,
                 artifact_store,
                 index_writer_tx,

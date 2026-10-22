@@ -6,6 +6,9 @@ use rustc_middle::ty;
 pub(super) enum Scope {
     Critical,
     Any,
+    /// Includes data-free capabilities that must not be leaked, but do not
+    /// exclude ordinary filesystem work or suspension.
+    Ownership,
 }
 
 pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId) -> Option<Scope> {
@@ -13,6 +16,13 @@ pub(super) fn direct(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId)
     let krate = cx.tcx.crate_name(definition.krate);
     if super::canonical_path(cx, definition) == "zccache_daemon_core::daemon::server::persist::staged_store::read_guard::StagedMaterializationGuard" {
         return Some(Scope::Any);
+    }
+    if krate.as_str() == "zccache_core"
+        && name.as_str() == "CacheRootWriterLease"
+        && super::canonical_path(cx, definition)
+            == "zccache_core::cache_root_lock::CacheRootWriterLease"
+    {
+        return Some(Scope::Ownership);
     }
     match krate.as_str() {
         "zccache_daemon_core"
@@ -79,7 +89,11 @@ pub(super) fn contains<'tcx>(
             .any(|value| contains(cx, value, scope, seen)),
         ty::Adt(definition, arguments) => {
             if let Some(role) = direct(cx, definition.did()) {
-                return role == Scope::Critical || scope == Scope::Any;
+                return match role {
+                    Scope::Critical => true,
+                    Scope::Any => scope != Scope::Critical,
+                    Scope::Ownership => scope == Scope::Ownership,
+                };
             }
             let name = cx.tcx.item_name(definition.did());
             let krate = cx.tcx.crate_name(definition.did().krate);
@@ -88,7 +102,7 @@ pub(super) fn contains<'tcx>(
             {
                 return false;
             }
-            if scope == Scope::Any
+            if scope != Scope::Critical
                 && krate.as_str() == "zccache_daemon_core"
                 && name.as_str() == "StagingRoot"
                 && cx

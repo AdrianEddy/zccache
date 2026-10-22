@@ -25,6 +25,8 @@
 //! fires.
 
 use super::*;
+#[path = "exec_persistence.rs"]
+mod persistence;
 use crate::depgraph::scanner::scan_recursive_cached;
 use crate::depgraph::search_paths::IncludeSearchPaths;
 use crate::protocol::{ExecCachePolicy, ExecOutputStreams};
@@ -866,7 +868,15 @@ pub(super) async fn store_exec_artifact(
     artifact: ArtifactData,
     staged_sources: Option<Vec<NormalizedPath>>,
 ) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    store_exec_artifact_inner(state, key_hex, artifact, staged_sources, None).await
+    persistence::store_exec_artifact_inner(
+        state,
+        key_hex,
+        artifact,
+        staged_sources,
+        None,
+        crate::core::sync::OPERATION_TIMEOUT,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -875,83 +885,17 @@ pub(super) async fn store_exec_artifact_with_handoff_gate(
     key_hex: String,
     artifact: ArtifactData,
     gate: Arc<PublicationHandoffGate>,
+    admission_bound: std::time::Duration,
 ) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    store_exec_artifact_inner(state, key_hex, artifact, None, Some(gate)).await
-}
-
-async fn store_exec_artifact_inner(
-    state: &Arc<SharedState>,
-    key_hex: String,
-    artifact: ArtifactData,
-    staged_sources: Option<Vec<NormalizedPath>>,
-    handoff_gate: Option<Arc<PublicationHandoffGate>>,
-) -> Result<Option<CachedArtifact>, StagedPublishFailure> {
-    let cached = CachedArtifact::from_artifact_data(&artifact);
-    let publication_guard = if staged_sources.is_none() {
-        let Some(guard) = begin_artifact_publication(state).await else {
-            return Ok(None);
-        };
-        Some(guard)
-    } else {
-        None
-    };
-    if let Some(sources) = staged_sources {
-        publish_artifact_paths_observed(state, &key_hex, cached.meta.clone(), &sources)?;
-        return Ok(Some(cached));
-    }
-    {
-        let artifact_dir = state.artifact_dir.clone();
-        let key_for_persist = key_hex.clone();
-        let payloads: Vec<Arc<Vec<u8>>> = artifact
-            .outputs
-            .iter()
-            .filter_map(|o| o.payload.as_bytes().cloned())
-            .collect();
-        let persist_meta = cached.meta.clone();
-        if payloads.is_empty() {
-            // Stdout/stderr-only artifacts have no payload files to persist,
-            // so expose their index entry to the final shutdown flush now.
-            state.artifact_store.insert(&key_hex, &persist_meta);
-        }
-        let completion_gate = if let Some(gate) = handoff_gate {
-            gate.acquired.notify_one();
-            gate.resume.notified().await;
-            Some(gate)
-        } else {
-            None
-        };
-        state.artifacts.insert(key_hex.clone(), cached);
-        let sem = Arc::clone(&state.persist_semaphore);
-        let publication_guard_for_task =
-            publication_guard.expect("direct exec publication acquired an owned guard");
-        let index_writer_tx = state.index_writer_tx.clone();
-        kernal_api::async_engine::launch(async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "persist_semaphore is owned by ServerState for the daemon's lifetime; AcquireError here would be a logic bug (semaphore explicitly closed), not a runtime condition"
-            )]
-            let _permit = sem
-                .acquire()
-                .await
-                .expect("persist_semaphore is owned by ServerState and never closed");
-            let written = kernal_api::async_engine::launch_blocking(move || {
-                let _publication_guard = publication_guard_for_task;
-                if persist_artifact_payloads(&artifact_dir, &key_for_persist, &payloads).is_ok() {
-                    let _ = index_writer_tx
-                        .send(IndexWriterCommand::Insert(key_for_persist, persist_meta));
-                }
-            })
-            .detach_on_drop()
-            .await;
-            if let Err(error) = written {
-                tracing::warn!(%error, "exec artifact persistence task failed to join");
-            }
-            if let Some(gate) = completion_gate {
-                gate.persisted.notify_one();
-            }
-        }).detach();
-    }
-    Ok(None)
+    persistence::store_exec_artifact_inner(
+        state,
+        key_hex,
+        artifact,
+        None,
+        Some(gate),
+        admission_bound,
+    )
+    .await
 }
 
 // ─── Path normalization ─────────────────────────────────────────────────

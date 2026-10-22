@@ -112,3 +112,7 @@ mod tests {
         .await;
     }
 }
+
+#[cfg(test)]
+#[path = "exec_direct_retirement_tests.rs"]
+mod direct_retirement_tests;

@@ -7,10 +7,36 @@ pub(super) fn retire_for(
     retired: Vec<CachedArtifact>,
     bound: std::time::Duration,
 ) -> impl std::future::Future<Output = ()> {
+    retire_with_owner_for(None, retired, bound)
+}
+
+/// Retain cache-root ownership until the blocking cleanup actually finishes.
+pub(super) fn retire_owned_for(
+    root: crate::core::cache_root_lock::CacheRootWriterLease,
+    retired: Vec<CachedArtifact>,
+    bound: std::time::Duration,
+) -> impl std::future::Future<Output = ()> {
+    retire_with_owner_for(Some(root), retired, bound)
+}
+
+fn retire_with_owner_for(
+    owner: Option<crate::core::cache_root_lock::CacheRootWriterLease>,
+    retired: Vec<CachedArtifact>,
+    bound: std::time::Duration,
+) -> impl std::future::Future<Output = ()> {
     let task = if retired.is_empty() {
         None
     } else {
-        Some(kernal_api::async_engine::launch_blocking(move || drop(retired)).detach_on_drop())
+        Some(
+            kernal_api::async_engine::launch_blocking(move || {
+                // Capture records first so even queued-job destruction retains
+                // the cache owner through all record destruction.
+                let _ = &retired;
+                let _cache_lifetime = owner;
+                drop(retired);
+            })
+            .detach_on_drop(),
+        )
     };
     async move {
         if let Some(task) = task {

@@ -38,7 +38,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         }
     }
     let mut leaf_sets = Vec::new();
-    for scope in [Scope::Critical, Scope::Any] {
+    for scope in [Scope::Critical, Scope::Any, Scope::Ownership] {
         let mut leaves = Vec::new();
         for (local, declaration) in owned.local_decls.iter_enumerated() {
             if !aliases.contains(&local) {
@@ -82,7 +82,10 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     let data = MoveData::gather_moves(body, cx.tcx, |_| true);
     let mut sets = Vec::new();
     let mut borrowed = Vec::new();
-    for (scope, leaves) in [Scope::Critical, Scope::Any].into_iter().zip(leaf_sets) {
+    for (scope, leaves) in [Scope::Critical, Scope::Any, Scope::Ownership]
+        .into_iter()
+        .zip(leaf_sets)
+    {
         // Dropping/moving a reference never releases its caller-owned guard.
         borrowed.push(
             body.args_iter().any(|local| {
@@ -110,7 +113,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         }
         sets.push(guards);
     }
-    if sets[1].is_empty() && !borrowed[1] {
+    if sets[2].is_empty() && !borrowed[2] {
         return;
     }
     let mut cursor = super::guard_initialization::GuardInitialization::new(cx.tcx, body, &data)
@@ -123,7 +126,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             block,
             statement_index: value.statements.len(),
         });
-        if !borrowed[1] && !sets[1].iter().any(|guard| cursor.get().contains(*guard)) {
+        if !borrowed[2] && !sets[2].iter().any(|guard| cursor.get().contains(*guard)) {
             continue;
         }
         if (suspensions.contains(&block)
@@ -204,10 +207,9 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
                 }
             }
         }
-        let index = if effects
-            & (super::effects::SWEEP | super::effects::UNKNOWN | super::effects::ESCAPE)
-            != 0
-        {
+        let index = if effects & super::effects::ESCAPE != 0 {
+            2
+        } else if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
             1
         } else if effects & super::effects::BULK != 0 {
             0
@@ -218,11 +220,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             cx,
             body,
             terminator,
-            if index == 0 {
-                Scope::Critical
-            } else {
-                Scope::Any
-            },
+            [Scope::Critical, Scope::Any, Scope::Ownership][index],
         );
         if borrowed[index]
             || sets[index].iter().any(|guard| {

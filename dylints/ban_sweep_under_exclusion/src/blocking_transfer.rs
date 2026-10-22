@@ -37,12 +37,17 @@ pub(super) fn moves<'tcx>(
     }
     let output = arguments.as_closure().sig().skip_binder().output();
     if !super::checked_transfer::known_output(cx, output, &mut Vec::new())
-        || super::guard_types::contains(cx, output, Scope::Any, &mut Vec::new())
+        || super::guard_types::contains(cx, output, Scope::Ownership, &mut Vec::new())
     {
         return Vec::new();
     }
+    let exclusion = if scope == Scope::Ownership {
+        Scope::Any
+    } else {
+        scope
+    };
     if !super::guard_types::contains(cx, value, scope, &mut Vec::new())
-        || !cancellation_safe(cx, value, scope)
+        || !cancellation_safe(cx, value, exclusion)
     {
         return Vec::new();
     }

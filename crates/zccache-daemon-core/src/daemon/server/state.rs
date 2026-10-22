@@ -505,6 +505,47 @@ mod cache_root_writer_tests {
     /// `ErrorKind`, so `WouldBlock` is what tells contention apart from a real
     /// filesystem fault.
     #[test]
+    fn released_root_stays_owned_until_every_background_lease_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = CacheRootWriterLock::acquire(temp.path()).unwrap();
+        let one = first.lease_for(std::time::Duration::from_secs(1)).unwrap();
+        let two = first.lease_for(std::time::Duration::from_secs(1)).unwrap();
+        first.release();
+        assert!(first.lease_for(std::time::Duration::ZERO).is_none());
+        assert_eq!(
+            CacheRootWriterLock::acquire(temp.path())
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(one);
+        assert_eq!(
+            CacheRootWriterLock::acquire(temp.path())
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(two);
+        let _next = CacheRootWriterLock::acquire(temp.path()).unwrap();
+    }
+
+    #[test]
+    fn dropping_the_server_claim_does_not_revoke_a_background_root_lease() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = CacheRootWriterLock::acquire(temp.path()).unwrap();
+        let job = first.lease_for(std::time::Duration::from_secs(1)).unwrap();
+        drop(first);
+        assert_eq!(
+            CacheRootWriterLock::acquire(temp.path())
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(job);
+        let _next = CacheRootWriterLock::acquire(temp.path()).unwrap();
+    }
+
+    #[test]
     fn a_second_writer_is_refused_while_the_first_holds_the_root() {
         let temp = tempfile::tempdir().unwrap();
         let first = CacheRootWriterLock::acquire(temp.path()).unwrap();

@@ -9,3 +9,7 @@ function items and UFCS. The same operations on bytes remain allowed.
 `ordered_local_unwind` covers release after tuple destructuring, rebinding,
 branching and `?`. Its negative companion retains a live destructor after a
 partial move, which must keep the real unwind and cleanup violation visible.
+
+`root_lease_ownership` rejects resolved and generic leaks, erasure, suppression
+and raw overwrite of a real core root lease. `root_lease_work` permits bounded
+cleanup, operation lifetimes and non-owning markers with that capability.

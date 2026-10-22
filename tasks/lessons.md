@@ -361,3 +361,9 @@ only separately owned data-free operation permits may survive suspension.
 ### Pre-elaboration drops and downstream ownership checks (#1964)
 - A moved-value drop may be impossible to execute while still present in compiler MIR. Its impossible unwind edge can contaminate later guard state even when the lint skips checking the drop itself. Prune only drops proven empty by initialization/drop requirements on a private MIR clone, and retain a negative fixture with a real destructor after a partial move.
 - Validate the proposed precision change against a minimal positive and real negative. Discard broader analysis changes when the control already passes without them; do not classify an unsupported helper-transfer shape as a false-positive regression.
+
+### Native job ownership survives explicit service release (#1964)
+- Retaining Arc<SharedState> does not prove a cache-root claim survives shutdown: the controller explicitly releases its native lock. Test actual native reacquisition after explicit release while cleanup is paused. A narrow job lease can keep that claim alive without retaining cache state and its recursive destructors.
+- Distinguish ownership capabilities from short publication/store exclusion. Lifetime leases can span bounded admission and blocking cleanup while resolved leaks and erasure remain forbidden.
+- Keep semaphore admission on its async lane with a real duration before queuing blocking work. Moving a capacity wait into the same blocking pool as permit holders can create starvation cycles.
+- A timeout of a cleanup waiter does not stop a filesystem syscall; ownership must remain with the actual worker until completion. Controller release must refuse new leases while outstanding jobs keep their own native claims.
