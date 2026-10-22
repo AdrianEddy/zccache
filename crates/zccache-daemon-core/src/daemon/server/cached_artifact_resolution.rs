@@ -33,12 +33,12 @@ impl Source<'_> {
     }
 }
 
-pub(super) fn resolve(
-    cached: &CachedArtifact,
+pub(super) fn resolve<'a>(
+    cached: &'a CachedArtifact,
     artifact_dir: &Path,
     key_hex: &str,
     source: Source<'_>,
-) -> MaterializationResult<MaterializationPayloads> {
+) -> MaterializationResult<MaterializationPayloads<'a>> {
     let existing = cached.payloads.get().cloned();
     let existing_is_staged = existing.as_ref().is_some_and(|payloads| {
         payloads.iter().any(
@@ -94,7 +94,7 @@ pub(super) fn resolve(
             Ok(MaterializationPayloads {
                 payloads,
                 staged_guard,
-                _provisional_staged_owner: cached._provisional_staged_owner.clone(),
+                cached,
             })
         }
         None => Err(cache_blob_missing(

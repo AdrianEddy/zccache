@@ -210,6 +210,8 @@ fn publication_while_sweeping(clear: bool) {
     hook.wait_until_reached_for(Duration::from_secs(10));
     let detached_before_sweep = !staged_root(&artifact_dir).join(&old_key).exists()
         && !pointer_path(&artifact_dir, &old_key).exists();
+    let native_available =
+        crate::artifact::StagedReadGuard::acquire_for(&artifact_dir, Duration::ZERO).is_ok();
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let publisher_dir = artifact_dir.clone();
     let publisher_key = new_key.clone();
@@ -219,6 +221,7 @@ fn publication_while_sweeping(clear: bool) {
     });
     let published = crate::core::wait::recv_for(&done_rx, Duration::from_secs(1));
     let published_before_resume = published.is_ok();
+    let publication_started = staged_root(&artifact_dir).join(&new_key).exists();
     // Release and drain both workers even on the baseline failure path.
     hook.resume();
     let result = published.unwrap_or_else(|_| {
@@ -233,8 +236,12 @@ fn publication_while_sweeping(clear: bool) {
         .unwrap()
         .unwrap();
     assert!(
+        native_available,
+        "paused recursive cleanup retained the native store lock"
+    );
+    assert!(
         published_before_resume,
-        "paused recursive cleanup retained store/publication exclusion"
+        "publication did not finish during paused cleanup: native_available={native_available}, publication_started={publication_started}"
     );
     assert!(
         detached_before_sweep,

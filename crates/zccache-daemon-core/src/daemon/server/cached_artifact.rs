@@ -21,18 +21,20 @@ pub(crate) enum CachedPayload {
 
 /// Payloads resolved for one requested-output delivery.
 ///
-/// Staged file payloads carry the ownership needed to keep their source paths
-/// alive through delivery. Durable generation paths use the shared store-lock
-/// guard; provisional compile paths retain their private staging plan. Both
-/// lifetimes are tied to this value so callers cannot drop either protection
-/// before reflink/hardlink/copy or directory unpacking.
-pub(crate) struct MaterializationPayloads {
+/// The delivery borrows an owned cache-record clone, never a DashMap shard.
+/// That record keeps private staging paths alive. Durable paths additionally
+/// retain their native shared store lease through copying or unpacking.
+pub(crate) struct MaterializationPayloads<'a> {
     payloads: Arc<[CachedPayload]>,
     staged_guard: Option<StagedMaterializationGuard>,
-    _provisional_staged_owner: Option<Arc<StagedCompilePlan>>,
+    cached: &'a CachedArtifact,
 }
 
-impl std::ops::Deref for MaterializationPayloads {
+#[cfg(feature = "test-support")]
+#[path = "materialization_contract.rs"]
+pub(crate) mod contract;
+
+impl std::ops::Deref for MaterializationPayloads<'_> {
     type Target = [CachedPayload];
 
     fn deref(&self) -> &Self::Target {
@@ -40,9 +42,15 @@ impl std::ops::Deref for MaterializationPayloads {
     }
 }
 
-impl MaterializationPayloads {
+// Drop checking keeps the borrowed record alive through native lease teardown.
+// The destructor performs no work; fields release in declaration order.
+impl Drop for MaterializationPayloads<'_> {
+    fn drop(&mut self) {}
+}
+
+impl MaterializationPayloads<'_> {
     pub(crate) fn is_provisional_staged(&self) -> bool {
-        self._provisional_staged_owner.is_some()
+        self.cached._provisional_staged_owner.is_some()
     }
 
     pub(crate) fn staged_lock_timings(&self) -> Option<(u64, u64)> {
@@ -341,11 +349,11 @@ impl CachedArtifact {
 /// missing-blob outcome into a typed [`MaterializationFailure`] the caller can
 /// report and (for genuine blob loss) use as depgraph-invalidation evidence.
 #[cfg(test)]
-pub(super) fn ensure_payloads_for_materialization(
-    cached: &CachedArtifact,
+pub(super) fn ensure_payloads_for_materialization<'a>(
+    cached: &'a CachedArtifact,
     artifact_dir: &Path,
     key_hex: &str,
-) -> MaterializationResult<MaterializationPayloads> {
+) -> MaterializationResult<MaterializationPayloads<'a>> {
     lease_resolution::resolve(
         cached,
         artifact_dir,
@@ -354,11 +362,11 @@ pub(super) fn ensure_payloads_for_materialization(
     )
 }
 
-pub(super) fn ensure_payloads_for_materialization_for_state(
+pub(super) fn ensure_payloads_for_materialization_for_state<'a>(
     state: &SharedState,
-    cached: &CachedArtifact,
+    cached: &'a CachedArtifact,
     key_hex: &str,
-) -> MaterializationResult<MaterializationPayloads> {
+) -> MaterializationResult<MaterializationPayloads<'a>> {
     lease_resolution::resolve(
         cached,
         &state.artifact_dir,
@@ -571,10 +579,9 @@ mod tests {
             &"7".repeat(64),
         )
         .unwrap();
-        drop(hit);
         assert!(
             root.as_path().exists(),
-            "the payload guard must retain the private plan after its artifact is replaced"
+            "the borrowed hit must retain its private plan after the map owner is replaced"
         );
         assert_eq!(
             std::fs::read(match &payloads[0] {
@@ -585,6 +592,11 @@ mod tests {
             b"staged payload"
         );
         drop(payloads);
+        assert!(
+            root.as_path().exists(),
+            "the owned hit still retains its plan"
+        );
+        drop(hit);
         assert!(
             !root.as_path().exists(),
             "the private plan should clean up after the final hit clone drops"
@@ -903,7 +915,10 @@ mod tests {
                 "single compile",
                 include_str!("handle_compile/cached_hit.rs"),
             ),
-            ("multi compile", include_str!("handle_compile_multi.rs")),
+            (
+                "multi compile",
+                include_str!("handle_compile_multi_lookup.rs"),
+            ),
             ("exact exec", include_str!("handle_exec.rs")),
             ("link and directory bundle", include_str!("handle_link.rs")),
         ];

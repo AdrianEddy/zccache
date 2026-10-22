@@ -282,6 +282,12 @@ pub(super) struct CachedArtifactLookup {
 }
 
 impl CachedArtifactLookup {
+    /// Separate publication from the owned record for delivery. Tuple field
+    /// order also releases publication first if the result is discarded.
+    pub(super) fn into_parts(self) -> (crate::core::sync::PublicationReadPermit, CachedArtifact) {
+        (self._publication_guard, self.cached)
+    }
+
     fn new(
         cached: CachedArtifact,
         publication_guard: crate::core::sync::PublicationReadPermit,

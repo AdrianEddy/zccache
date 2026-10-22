@@ -151,6 +151,15 @@ observed overruns; it does not cancel arbitrary callbacks in place, guarantee a
 hard real-time deadline, interrupt an uninterruptible kernel syscall, or establish
 a global order between operation permits.
 
+Materialization payloads borrow an owned cached-record clone, never a DashMap
+shard. Rust requires that record to outlive both payload access and native lease
+destruction; private staging cleanup therefore belongs to the record owner.
+Compile hits separate publication ownership from that record, release publication
+before output copying, and retain the record through delivery. Durable generation
+paths additionally keep their shared native store lease until delivery finishes.
+Compiler contract fixtures exercise early owner drops and correct release order;
+isolated runtime regressions cover retained readers, replacement, Clear and eviction.
+
 ### Soldr fixes audited (2026-09-01 through 2026-10-21)
 
 | PR | Status | Relevance here |

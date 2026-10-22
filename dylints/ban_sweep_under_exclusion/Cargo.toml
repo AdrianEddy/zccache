@@ -16,6 +16,7 @@ dylint_testing = "=6.0.3"
 serde_json = "1"
 zccache-core = { path = "../../crates/zccache-core" }
 zccache-artifact = { path = "../../crates/zccache-artifact" }
+zccache-daemon-core = { path = "../../crates/zccache-daemon-core", features = ["test-support"] }
 
 [package.metadata.rust-analyzer]
 rustc_private = true

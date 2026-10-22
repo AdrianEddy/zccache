@@ -102,8 +102,8 @@ pub(super) fn check_unit_cache(
                 // DashMap guard is held here (issue #1180's short-lock model):
                 // `lookup_artifact_with_disk_fallback` clones the owned
                 // artifact out of the map before this runs, and
-                // `ensure_payloads_for_materialization` returns an owned,
-                // typed result instead of borrowing. Each check_unit_cache
+                // the delivery lease borrows that owned clone rather than
+                // a map shard. Each check_unit_cache
                 // runs in its own blocking task, so writes are already
                 // parallel across units.
                 if let Some(cached) = lookup_artifact_with_disk_fallback(state, artifact_key_hex) {

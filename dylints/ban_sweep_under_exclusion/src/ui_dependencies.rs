@@ -32,7 +32,12 @@ pub(super) fn dependency_flags(bound: Duration) -> Vec<String> {
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
     let mut flags = vec!["--edition=2021".into()];
-    for name in ["zccache_core", "zccache_artifact", "kernal_api"] {
+    for name in [
+        "zccache_core",
+        "zccache_artifact",
+        "zccache_daemon_core",
+        "kernal_api",
+    ] {
         let artifact = messages
             .iter()
             .find_map(|message| {

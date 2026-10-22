@@ -183,6 +183,9 @@ impl EmbeddedFlushReport {
 
 mod cache_trim;
 mod cached_artifact;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use cached_artifact::contract::{TestMaterializationLease, TestMaterializationOwner};
 mod cached_artifact_retirement;
 mod client_env;
 mod compile_concurrency;

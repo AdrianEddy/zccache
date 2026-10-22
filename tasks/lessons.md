@@ -352,3 +352,8 @@ only separately owned data-free operation permits may survive suspension.
 - A staged generation's observed age includes directory mtimes. Retention
   fixtures must age directories after their children as well as payload and
   pointer files; aging only files never reaches expiration-based eviction.
+
+### Delivery ownership and destructor lifetimes (#1964)
+- Borrow delivery payloads from an owned cache-record clone so Rust keeps private cleanup ownership alive through native lease teardown. An empty Drop can enforce the destruction boundary; compiler fixtures must exercise both later access and implicit destruction after the last access.
+- Separate publication from the owned record before output copying, with explicit safe declaration/drop order. Use a real private-type compiler bridge plus a passing access control; a private-import failure cannot prove the lifetime contract.
+- Paused-sweep publication regressions should report native lock availability separately from full publisher completion. Retain failing timing receipts and existing deadlines when diagnosing intermittent failures.

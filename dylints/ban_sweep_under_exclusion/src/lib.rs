@@ -201,10 +201,12 @@ fn ui() {
     ui_test_support::run(env!("CARGO_PKG_NAME"), env!("CARGO_MANIFEST_DIR"));
     let _directory =
         ui_test_support::CurrentDirGuard::set(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+    let flags = ui_dependencies::dependency_flags(std::time::Duration::from_secs(300));
     dylint_testing::ui::Test::src_base(env!("CARGO_PKG_NAME"), "examples")
-        .rustc_flags(ui_dependencies::dependency_flags(
-            std::time::Duration::from_secs(300),
-        ))
+        .rustc_flags(flags.clone())
+        .run();
+    dylint_testing::ui::Test::src_base(env!("CARGO_PKG_NAME"), "ui_contract")
+        .rustc_flags(flags)
         .run();
 }
 

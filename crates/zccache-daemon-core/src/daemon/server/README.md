@@ -27,6 +27,7 @@ Topic-focused submodules:
 - `session.rs` — `Request::SessionStart` handler + session log writer
 - `exec_publication.rs` — requested-output commit followed by publication release and owned retirement
 - `cached_artifact_retirement.rs` — schedule displaced-record cleanup before returning a bounded waiter
+- `materialization_contract.rs` — feature-gated compiler fixture access to the real private payload lifetime
 - `handle_clear.rs` — `Request::Clear` handler
 - `handle_compile_ephemeral.rs` — single-roundtrip ephemeral compile + direct (uncached) compiler invocation
 - `directory_link.rs` — transactional publication and delivery for directory-producing link tools
