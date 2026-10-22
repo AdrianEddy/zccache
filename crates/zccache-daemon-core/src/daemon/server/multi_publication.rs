@@ -1,17 +1,21 @@
 //! Multi-source cache metadata replacement and displaced-record ownership.
 use super::*;
 
+/// Metadata-only input excludes private staging cleanup during entry lookup.
+/// Construct the durable record only at the insertion that takes ownership.
 pub(super) fn replace_cached_artifact(
     state: &SharedState,
     key: String,
-    cached: CachedArtifact,
+    meta: ArtifactIndex,
     retired: &mut Vec<CachedArtifact>,
 ) {
     use dashmap::mapref::entry::Entry;
     match state.artifacts.entry(key) {
-        Entry::Occupied(mut entry) => retired.push(entry.insert(cached)),
+        Entry::Occupied(mut entry) => {
+            retired.push(entry.insert(CachedArtifact::from_index(meta)));
+        }
         Entry::Vacant(entry) => {
-            entry.insert(cached);
+            entry.insert(CachedArtifact::from_index(meta));
         }
     }
 }
@@ -53,13 +57,7 @@ mod tests {
                     replace_cached_artifact(
                         &state,
                         replacement_key,
-                        CachedArtifact::from_index(ArtifactIndex::new(
-                            vec![],
-                            vec![],
-                            b"replacement".to_vec(),
-                            vec![],
-                            0,
-                        )),
+                        ArtifactIndex::new(vec![], vec![], b"replacement".to_vec(), vec![], 0),
                         &mut retired,
                     );
                     assert!(!unwind, "exercise publication worker unwind");

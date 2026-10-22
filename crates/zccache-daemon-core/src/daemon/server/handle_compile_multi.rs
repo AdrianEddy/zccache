@@ -631,12 +631,10 @@ pub(super) async fn handle_compile_multi(
                     Arc::clone(&empty),
                     0,
                 );
-                let cached = CachedArtifact::from_index(meta.clone());
-
                 super::multi_publication::replace_cached_artifact(
                     &state_task,
                     artifact_key_hex.clone(),
-                    cached,
+                    meta.clone(),
                     &mut retired_artifacts,
                 );
 
