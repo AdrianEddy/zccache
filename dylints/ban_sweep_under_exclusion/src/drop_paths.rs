@@ -41,7 +41,7 @@ fn visit<'tcx>(
                 && !(cx.tcx.crate_name(adt.did().krate).as_str() == "core"
                     && cx.tcx.item_name(adt.did()).as_str() == "ManuallyDrop")
             {
-                let known = super::drop_variants::known(body, place);
+                let known = super::drop_variants::known(cx, body, place);
                 for (variant, definition) in adt.variants().iter_enumerated() {
                     if known.is_some_and(|known| known != variant) {
                         continue;

@@ -40,4 +40,17 @@ fn invalid_changed(permit: PublicationReadPermit, cleanup: Cleanup, value: usize
     changed(cleanup, value);
     drop(permit);
 }
+fn boxed_populated(cleanup: Cleanup, value: usize) -> std::sync::Arc<Holder> {
+    let holder = Holder {
+        cleanup: Some(cleanup),
+        value: 0,
+    };
+    checked(value);
+    std::sync::Arc::new(holder)
+}
+fn invalid_boxed_populated(permit: PublicationReadPermit, cleanup: Cleanup, value: usize) {
+    let holder = boxed_populated(cleanup, value);
+    drop(permit);
+    drop(holder);
+}
 fn main() {}

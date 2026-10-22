@@ -12,6 +12,9 @@ recursive deletion is forbidden while either remains held.
 Guard analysis uses compiler move initialization, guard field paths and actual
 control-flow edges, with enum variant refinement. The compiler fixtures cover
 aliases, partial moves, released wrappers and real core publication roles.
+Drop effects also follow uniquely initialized enum values through aggregate
+fields and whole-value moves. Arguments, ambiguous writes, pointer/reference
+aliases and unsupported projections do not establish a known-variant proof.
 
 Instantiated helper summaries propagate ownership leaks and ownership-erasing
 casts, including generic `forget` and `Box<dyn Any>` helpers. Non-owning markers

@@ -28,4 +28,18 @@ fn valid(permit: PublicationReadPermit, value: usize) {
     drop(permit);
     drop(holder);
 }
+fn boxed(value: usize) -> std::sync::Arc<Holder> {
+    let initial = Holder {
+        cleanup: None,
+        value: 0,
+    };
+    let holder = initial;
+    checked(value);
+    std::sync::Arc::new(holder)
+}
+fn valid_boxed(permit: PublicationReadPermit, value: usize) {
+    let holder = boxed(value);
+    drop(permit);
+    drop(holder);
+}
 fn main() {}
