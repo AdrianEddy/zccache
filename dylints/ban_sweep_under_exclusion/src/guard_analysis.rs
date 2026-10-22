@@ -119,7 +119,7 @@ fn contains_guard<'tcx>(
             };
             let path = cx.get_def_path(adt.did());
             let name = path.last().map(|name| name.as_str());
-            if cx.tcx.def_path_str(adt.did())
+            if super::canonical_path(cx, adt.did())
                 == "zccache_daemon_core::daemon::server::staging_root::StagingRoot"
             {
                 return false;

@@ -5,8 +5,5 @@ fn commit(barrier: &PublicationBarrier) {
     let permit: PublicationCommitPermit = barrier.blocking_write_for(Duration::from_secs(1));
     drop(permit);
 }
-async fn drain(barrier: &PublicationBarrier) {
-    let permit: PublicationDrainPermit = barrier.drain_for(Duration::from_secs(1)).await;
-    drop(permit);
-}
+fn drain_kind(_: PublicationDrainPermit) {}
 fn main() {}

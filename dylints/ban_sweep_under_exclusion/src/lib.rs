@@ -53,13 +53,38 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
         {
             return;
         }
-        let ExprKind::Path(path) = expr.kind else {
-            return;
-        };
-        let Res::Def(_, definition) = cx.qpath_res(&path, expr.hir_id) else {
-            return;
+        let definition = match expr.kind {
+            ExprKind::Path(path) => match cx.qpath_res(&path, expr.hir_id) {
+                Res::Def(_, definition) => definition,
+                _ => return,
+            },
+            ExprKind::MethodCall(..) => {
+                match cx.typeck_results().type_dependent_def_id(expr.hir_id) {
+                    Some(definition) => definition,
+                    None => return,
+                }
+            }
+            _ => return,
         };
         let path = cx.get_def_path(definition);
+        let direct = matches!(expr.kind, ExprKind::MethodCall(..))
+            || matches!(cx.tcx.parent_hir_node(expr.hir_id),
+            rustc_hir::Node::Expr(Expr { kind: ExprKind::Call(callee, _), .. }) if callee.hir_id == expr.hir_id);
+        let drain = cx.tcx.crate_name(definition.krate).as_str() == "zccache_core"
+            && path
+                .iter()
+                .any(|part| part.as_str() == "PublicationBarrier")
+            && path.last().is_some_and(|part| part.as_str() == "drain_for");
+        if drain {
+            if !direct || !approved_drain_owner(cx, &filename) {
+                emit(
+                    cx,
+                    expr.span,
+                    "publication drains belong only to bounded checkpoint and shutdown owners",
+                );
+            }
+            return;
+        }
         let raw = matches!(
             cx.tcx.crate_name(definition.krate).as_str(),
             "std" | "tokio"
@@ -71,9 +96,6 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
             return;
         }
         // Even an approved owner may not export an erased raw function item.
-        let direct = matches!(cx.tcx.parent_hir_node(expr.hir_id),
-            rustc_hir::Node::Expr(Expr { kind: ExprKind::Call(callee, _), .. })
-            if callee.hir_id == expr.hir_id);
         if direct && approved_owner(cx, &filename) {
             return;
         }
@@ -85,9 +107,9 @@ impl<'tcx> rustc_lint::LateLintPass<'tcx> for BanSweepUnderExclusion {
     }
 }
 
-fn approved_owner(cx: &LateContext<'_>, filename: &str) -> bool {
+fn enclosing_function(cx: &LateContext<'_>) -> Option<rustc_hir::def_id::DefId> {
     let Some(body) = cx.enclosing_body else {
-        return false;
+        return None;
     };
     let mut owner = cx.tcx.hir_body_owner_def_id(body).to_def_id();
     while !matches!(
@@ -95,10 +117,28 @@ fn approved_owner(cx: &LateContext<'_>, filename: &str) -> bool {
         rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
     ) {
         let Some(parent) = cx.tcx.opt_parent(owner) else {
-            return false;
+            return None;
         };
         owner = parent;
     }
+    Some(owner)
+}
+
+fn approved_drain_owner(cx: &LateContext<'_>, filename: &str) -> bool {
+    let Some(owner) = enclosing_function(cx) else {
+        return false;
+    };
+    let path = canonical_path(cx, owner);
+    (path == "zccache_daemon_core::daemon::server::wal::drain_durable_state_for_shutdown"
+        && filename.ends_with("/server/wal.rs"))
+        || (path == "zccache_daemon_core::daemon::server::embedded::flush_embedded_state"
+            && filename.ends_with("/server/embedded.rs"))
+}
+
+fn approved_owner(cx: &LateContext<'_>, filename: &str) -> bool {
+    let Some(owner) = enclosing_function(cx) else {
+        return false;
+    };
     let name = cx.tcx.item_name(owner);
     let krate = cx.tcx.crate_name(owner.krate);
     if krate.as_str() == "zccache_artifact" {
@@ -188,4 +228,12 @@ fn ui() {
             300,
         )))
         .run();
+}
+
+fn canonical_path(cx: &LateContext<'_>, definition: rustc_hir::def_id::DefId) -> String {
+    cx.get_def_path(definition)
+        .iter()
+        .map(|part| part.as_str().to_string())
+        .collect::<Vec<_>>()
+        .join("::")
 }

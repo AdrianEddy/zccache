@@ -1790,3 +1790,30 @@ NEXT (still incomplete, do not push/merge #1964):
 7. Finish docs, clippy/lint, one clud-review invocation, full clean committed gate,
    separate PR merge, verify issue closed, fetch/switch main/rebase origin/main,
    clean tree and delete feature branches. Then #1965–1971 sequentially.
+
+
+### #1964 drain acquisition boundary (2026-10-22)
+
+- Captured RED for untrusted publication drain acquisition and factory capture
+  (`/tmp/zccache-1964-drain-owner-red.log`). A resolved method, alias/UFCS path or
+  factory reference now requires the exact WAL/embedded drain owner. Even an
+  approved owner may not export the raw factory as a function item.
+- Added actual-core negative alias/method/UFCS/factory cases and an included
+  auxiliary source with the genuine crate/module/file/function identity proving
+  the shutdown owner is accepted. Unrelated same-named methods remain accepted.
+  All 12 fixtures passed (`/tmp/zccache-1964-drain-owner-final.log`).
+- Important correction: rustc's def_path_str is display-oriented and can omit
+  the local crate prefix. Owner matching and the opaque StagingRoot exemption
+  now use canonical get_def_path symbols. Do not use pretty paths for identity.
+- Current full production probe still fails in guard analysis
+  (`/tmp/zccache-1964-typed-publication-workspace.log`), notably consumed async
+  MIR and raw FileLock over-classification. No push, gate attestation or PR.
+- Native-store migration design: centralize acquisition in artifact staged_lock;
+  expose a sealed StagedCommitGuard::acquire_for(artifact_dir, Duration) and
+  bounded StagedReadGuard acquisition. Remove the public raw open_store_lock
+  escape, migrate daemon publisher/maintenance/trash/materialization, CLI warm,
+  snapshot and coordination tests to typed guards. Owned native locks avoid a
+  self-referential borrowed guard. Preserve the exact same lock filename,
+  reader-path validity, 2s maintenance contention deferral and zero-wait empty
+  trash cleanup. All waits must require Duration; no unbounded compatibility
+  overload. Then classify commit vs read/drain effects by resolved types.
