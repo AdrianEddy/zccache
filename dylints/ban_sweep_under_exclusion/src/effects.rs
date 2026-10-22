@@ -59,6 +59,14 @@ fn function<'tcx>(
         let path = cx.get_def_path(definition);
         let name = path.last().map(|name| name.as_str()).unwrap_or("");
         let krate = cx.tcx.crate_name(definition.krate);
+        if matches!(krate.as_str(), "core" | "std")
+            && super::canonical_path(cx, definition) == "core::mem::drop"
+        {
+            return arguments
+                .types()
+                .next()
+                .map_or(0, |value| drop_value(cx, value, seen, &mut Vec::new()));
+        }
         if matches!(krate.as_str(), "zccache_artifact" | "zccache_daemon_core")
             && (path
                 .iter()
@@ -127,26 +135,92 @@ fn function<'tcx>(
             // metadata work. Every other effect in its body/helper graph
             // remains subject to the normal exclusion policy.
             if super::detach_policy::cursor_open(cx, definition)
-                && super::detach_policy::raw_read_dir(cx, target)
+                && matches!(target, Target::Call(value) if super::detach_policy::raw_read_dir(cx, value))
             {
                 return effects;
             }
-            let target = ty::EarlyBinder::bind(target)
+            let (value, dropping) = match target {
+                Target::Call(value) => (value, false),
+                Target::Drop(value) => (value, true),
+            };
+            let value = ty::EarlyBinder::bind(value)
                 .instantiate(cx.tcx, arguments)
                 .skip_norm_wip();
-            effects | call(cx, target, seen)
+            effects | if dropping {
+                drop_value(cx, value, seen, &mut Vec::new())
+            } else { call(cx, value, seen) }
         })
     })();
     seen[index].2 = Some(result);
     result
 }
 
-fn targets<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<ty::Ty<'tcx>> {
+enum Target<'tcx> {
+    Call(ty::Ty<'tcx>),
+    Drop(ty::Ty<'tcx>),
+}
+fn targets<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<Target<'tcx>> {
     body.basic_blocks
         .iter()
         .filter_map(|block| match &block.terminator().kind {
-            mir::TerminatorKind::Call { func, .. } => Some(func.ty(&body.local_decls, cx.tcx)),
+            mir::TerminatorKind::Call { func, .. } => {
+                Some(Target::Call(func.ty(&body.local_decls, cx.tcx)))
+            }
+            mir::TerminatorKind::Drop { place, .. } => {
+                Some(Target::Drop(place.ty(&body.local_decls, cx.tcx).ty))
+            }
             _ => None,
         })
         .collect()
+}
+
+pub(super) fn drop_value<'tcx>(
+    cx: &LateContext<'tcx>,
+    value: ty::Ty<'tcx>,
+    summaries: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
+    active: &mut Vec<ty::Ty<'tcx>>,
+) -> u8 {
+    if active.contains(&value) {
+        return 0;
+    }
+    if active.len() >= 128 {
+        return UNKNOWN;
+    }
+    active.push(value);
+    let effects = match value.kind() {
+        ty::Adt(definition, arguments) => {
+            if super::guard_types::direct(cx, definition.did()).is_some() {
+                0
+            } else {
+                let own = definition
+                    .destructor(cx.tcx)
+                    .filter(|drop| drop.did.is_local())
+                    .map_or(0, |drop| function(cx, drop.did, arguments, summaries));
+                let fields = if definition.did().is_local() {
+                    definition.all_fields().fold(0, |effects, field| {
+                        effects
+                            | drop_value(
+                                cx,
+                                field.ty(cx.tcx, arguments).skip_norm_wip(),
+                                summaries,
+                                active,
+                            )
+                    })
+                } else {
+                    arguments.types().fold(0, |effects, field| {
+                        effects | drop_value(cx, field, summaries, active)
+                    })
+                };
+                own | fields
+            }
+        }
+        ty::Tuple(fields) => fields.iter().fold(0, |effects, field| {
+            effects | drop_value(cx, field, summaries, active)
+        }),
+        ty::Array(field, _) | ty::Slice(field) => drop_value(cx, *field, summaries, active),
+        ty::Dynamic(..) | ty::Param(..) => UNKNOWN,
+        _ => 0,
+    };
+    active.pop();
+    effects
 }

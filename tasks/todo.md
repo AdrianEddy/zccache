@@ -1999,3 +1999,28 @@ Remaining enforcement work before #1964 can ship:
   workspace lib/bin Dylint is green with these checks
   (/tmp/zccache-1964-owner-escape-workspace.log). Other pending acceptance gates
   above still apply. New drop_sweep RED fixture is separate uncommitted work.
+
+### #1964 destructor cleanup analysis checkpoint (2026-10-22)
+
+- RED: explicit mem::drop and implicit scope exit hid a local destructor calling
+  DetachedKvNamespace::sweep_for under PublicationReadPermit
+  (/tmp/zccache-1964-drop-effects-red.log).
+- Added local destructor/owned-field drop effects to call summaries and MIR Drop
+  terminators, including enum/tuple/array fields. Native guard release itself is
+  not bulk cleanup. Skip uninitialized Drop placeholders in pre-elaboration MIR;
+  they cannot execute cleanup after a value has already moved out.
+- All 26 fixtures pass (/tmp/zccache-1964-drop-effects-final.log): explicit and
+  implicit cleanup are denied under the reader, cleanup after release is accepted.
+- Production probe is RED (/tmp/zccache-1964-drop-effects-workspace.log), with 25
+  diagnostics mostly caused by conservative UNKNOWN destructor effects. This is
+  a development checkpoint, not production-gate completion.
+- Temporary type tracing was removed after diagnosis. Trace evidence lives in
+  /tmp/zccache-1964-drop-types-trace.log. Unresolved types include generic callback
+  parameters, generic future/result types, HostAdmissionClassifier trait objects,
+  boxed admission/process futures, and dyn Send+Sync. Do not silence UNKNOWN or
+  claim a green production run using earlier pre-destructor receipts. Determine
+  concrete drop ownership/substitution or supply an enforceable closed contract.
+- Additional static cases still need coverage: closure-owned cleanup dropped
+  without invoking the closure; async/native sweep execution and consumed-MIR
+  behavior; typed transfer/release boundaries. Then complete OS/features/planted
+  violations, docs, clippy, review/full gate, PR and main cleanup before #1965.

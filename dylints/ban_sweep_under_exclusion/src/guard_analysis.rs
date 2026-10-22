@@ -24,6 +24,15 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
                                 &mut Vec::new(),
                             )
                     }
+                    mir::TerminatorKind::Drop { place, .. } => {
+                        effects
+                            | super::effects::drop_value(
+                                cx,
+                                place.ty(&later.local_decls, cx.tcx).ty,
+                                &mut Vec::new(),
+                                &mut Vec::new(),
+                            )
+                    }
                     _ => effects,
                 });
         let scope = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
@@ -101,10 +110,6 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         .into_results_cursor(body);
     for (block, value) in body.basic_blocks.iter_enumerated() {
         let terminator = value.terminator();
-        let mir::TerminatorKind::Call { func, .. } = &terminator.kind else {
-            continue;
-        };
-        let callee = func.ty(&body.local_decls, cx.tcx);
         cursor.seek_before_primary_effect(mir::Location {
             block,
             statement_index: value.statements.len(),
@@ -112,7 +117,31 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         if !borrowed[1] && !sets[1].iter().any(|guard| cursor.get().contains(*guard)) {
             continue;
         }
-        let effects = super::effects::call(cx, callee, &mut Vec::new());
+        // Pre-elaboration MIR retains drops of already moved values. They
+        // cannot execute a destructor and must not manufacture cleanup work.
+        if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {
+            match data.rev_lookup.find(place.as_ref()) {
+                rustc_mir_dataflow::move_paths::LookupResult::Exact(index)
+                | rustc_mir_dataflow::move_paths::LookupResult::Parent(Some(index))
+                    if !cursor.get().contains(index) =>
+                {
+                    continue
+                }
+                _ => {}
+            }
+        }
+        let effects = match &terminator.kind {
+            mir::TerminatorKind::Call { func, .. } => {
+                super::effects::call(cx, func.ty(&body.local_decls, cx.tcx), &mut Vec::new())
+            }
+            mir::TerminatorKind::Drop { place, .. } => super::effects::drop_value(
+                cx,
+                place.ty(&body.local_decls, cx.tcx).ty,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            ),
+            _ => continue,
+        };
         let index = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
             1
         } else if effects & super::effects::BULK != 0 {
