@@ -7,4 +7,12 @@ fn transfer<T: Send + 'static>(permit: PublicationReadPermit, value: T) {
     })
     .detach();
 }
+fn binding_order<T: Send + 'static>(permit: PublicationReadPermit, value: T) {
+    kernal_api::async_engine::launch_blocking(move || {
+        let _ = &permit;
+        let _value = value;
+        let _permit = permit;
+    })
+    .detach();
+}
 fn main() {}

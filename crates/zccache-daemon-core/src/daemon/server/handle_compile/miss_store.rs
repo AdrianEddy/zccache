@@ -615,113 +615,15 @@ fn store_rustc_outputs(
     drop(resource_admission);
 }
 
-fn remove_provisional_artifact(state: &SharedState, key_hex: &str, provisional: &CachedArtifact) {
-    if let dashmap::mapref::entry::Entry::Occupied(entry) =
-        state.artifacts.entry(key_hex.to_owned())
-    {
-        if entry.get().same_instance(provisional) {
-            entry.remove();
-        }
-    }
-}
+#[path = "miss_store_index.rs"]
+mod index_commit;
+use index_commit::{commit_rustc_artifact_index, remove_provisional_artifact};
 
-fn commit_rustc_artifact_index(
-    state: &SharedState,
-    key_hex: String,
-    mut meta: ArtifactIndex,
-    staged: bool,
-) -> Result<u64, StagedPublishFailure> {
-    use dashmap::mapref::entry::Entry;
-
-    if let Some(durable) = super::rustc_index::durable_rustc_index(state, &key_hex) {
-        meta = super::rustc_index::merge_rustc_index(meta, durable);
-    }
-
-    let commit = |metadata: ArtifactIndex| {
-        if staged {
-            send_staged_index_insert(state, key_hex.clone(), metadata)
-        } else {
-            enqueue_index_insert(state, key_hex.clone(), metadata);
-            Ok(0)
-        }
-    };
-
-    match state.artifacts.entry(key_hex.clone()) {
-        Entry::Occupied(mut entry) => {
-            meta = super::rustc_index::merge_rustc_index(meta, entry.get().meta.clone());
-            let commit_ns = commit(meta.clone())?;
-            entry.insert(CachedArtifact::from_index(meta));
-            Ok(commit_ns)
-        }
-        Entry::Vacant(entry) => {
-            let commit_ns = commit(meta.clone())?;
-            entry.insert(CachedArtifact::from_index(meta));
-            Ok(commit_ns)
-        }
-    }
-}
-
-/// Store the captured user depfile with its key root made logical.
-///
-/// The requested depfile on disk keeps the compiler's bytes; the cached
-/// payload comes from a private copy so a sibling worktree's hit can
-/// rehydrate its own root (`rehydrate_delivered_depfile`). A depfile that
-/// still names the root in a spelling the rewrite missed is bound to this
-/// root, so a sibling's hit recompiles rather than replaying it.
-pub(super) fn canonicalize_captured_depfile_root(
-    capture: &mut Option<(NormalizedPath, Vec<u8>)>,
-    persist_temp: Option<tempfile::TempDir>,
-    key_root: &Path,
-    temp_root: &Path,
-) -> std::io::Result<Option<tempfile::TempDir>> {
-    let Some((source_path, bytes)) = capture.as_mut() else {
-        return Ok(persist_temp);
-    };
-    let mut canonical = canonicalize_depfile_root(bytes, key_root);
-    if names_unrewritten_root_path(&canonical, key_root) {
-        canonical = bind_depfile_to_root(&canonical, key_root);
-    }
-    if canonical == *bytes {
-        return Ok(persist_temp);
-    }
-    *bytes = canonical;
-    if persist_temp.is_some() {
-        std::fs::write(source_path.as_path(), bytes.as_slice())?;
-        return Ok(persist_temp);
-    }
-    let requested = source_path.clone();
-    preserve_staged_depfile_for_persistence(capture, Some(&requested), temp_root)
-}
-
-/// Preserve canonical staged depfile bytes after requested-output
-/// materialization removes the compiler's private staging root.
-///
-/// The returned directory is an ownership guard: callers must keep it alive
-/// through synchronous persistence or move it into the detached persist task.
-pub(super) fn preserve_staged_depfile_for_persistence(
-    capture: &mut Option<(NormalizedPath, Vec<u8>)>,
-    requested_path: Option<&NormalizedPath>,
-    temp_root: &Path,
-) -> std::io::Result<Option<tempfile::TempDir>> {
-    let (Some((source_path, bytes)), Some(requested_path)) = (capture.as_mut(), requested_path)
-    else {
-        return Ok(None);
-    };
-    let file_name = requested_path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "staged user depfile has no file name",
-        )
-    })?;
-    std::fs::create_dir_all(temp_root)?;
-    let temp = tempfile::Builder::new()
-        .prefix("staged-depfile-persist-")
-        .tempdir_in(temp_root)?;
-    let persisted_source = temp.path().join(file_name);
-    std::fs::write(&persisted_source, bytes)?;
-    *source_path = persisted_source.into();
-    Ok(Some(temp))
-}
+#[path = "miss_store_depfile.rs"]
+mod depfile;
+pub(super) use depfile::{
+    canonicalize_captured_depfile_root, preserve_staged_depfile_for_persistence,
+};
 
 #[allow(clippy::too_many_arguments)]
 fn store_single_output(
@@ -974,10 +876,13 @@ fn store_single_output(
             .await
             .expect("persist_semaphore is owned by ServerState and never closed");
         let written = kernal_api::async_engine::launch_blocking(move || {
+            // Capture publication first for cancellation; bind it last so an
+            // invoked task releases it before dropping its other lifetime owners.
+            let _ = &publication_guard;
             let _guard = guard;
-            let _publication_guard = publication_guard;
             let _resource_admission = resource_admission;
             let _user_depfile_persist_temp = user_depfile_persist_temp;
+            let _publication_guard = publication_guard;
             // Issue #728: `gap_ms` = wall-clock between
             // "linker-success-recorded" (immediately before this spawn was
             // scheduled) and "persist-attempt-started" (now, inside the
