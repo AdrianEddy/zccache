@@ -10,7 +10,7 @@ pub(super) const UNKNOWN: u8 = 4;
 pub(super) fn call<'tcx>(
     cx: &LateContext<'tcx>,
     callee: ty::Ty<'tcx>,
-    seen: &mut Vec<DefId>,
+    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>)>,
 ) -> u8 {
     match callee.kind() {
         ty::FnDef(definition, arguments) => {
@@ -20,24 +20,32 @@ pub(super) fn call<'tcx>(
                 && matches!(cx.tcx.crate_name(definition.krate).as_str(), "core" | "std")
             {
                 return match arguments.types().next().map(|value| *value.kind()) {
-                    Some(ty::Closure(definition, _)) | Some(ty::FnDef(definition, _)) => {
-                        function(cx, definition, seen)
+                    Some(ty::Closure(definition, args)) | Some(ty::FnDef(definition, args)) => {
+                        function(cx, definition, args, seen)
                     }
                     _ => UNKNOWN,
                 };
             }
-            function(cx, *definition, seen)
+            function(cx, *definition, arguments, seen)
         }
         ty::FnPtr(..) => UNKNOWN,
         _ => UNKNOWN,
     }
 }
 
-fn function(cx: &LateContext<'_>, definition: DefId, seen: &mut Vec<DefId>) -> u8 {
-    if seen.contains(&definition) {
+fn function<'tcx>(
+    cx: &LateContext<'tcx>,
+    definition: DefId,
+    arguments: ty::GenericArgsRef<'tcx>,
+    seen: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>)>,
+) -> u8 {
+    if seen.contains(&(definition, arguments)) {
         return 0;
     }
-    seen.push(definition);
+    if seen.len() >= 128 {
+        return UNKNOWN;
+    }
+    seen.push((definition, arguments));
     let path = cx.get_def_path(definition);
     let name = path.last().map(|name| name.as_str()).unwrap_or("");
     let krate = cx.tcx.crate_name(definition.krate);
@@ -93,9 +101,12 @@ fn function(cx: &LateContext<'_>, definition: DefId, seen: &mut Vec<DefId>) -> u
             targets(cx, &stored.borrow())
         }
     };
-    calls
-        .into_iter()
-        .fold(0, |effects, target| effects | call(cx, target, seen))
+    calls.into_iter().fold(0, |effects, target| {
+        let target = ty::EarlyBinder::bind(target)
+            .instantiate(cx.tcx, arguments)
+            .skip_norm_wip();
+        effects | call(cx, target, seen)
+    })
 }
 
 fn targets<'tcx>(cx: &LateContext<'tcx>, body: &mir::Body<'tcx>) -> Vec<ty::Ty<'tcx>> {

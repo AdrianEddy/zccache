@@ -1905,3 +1905,14 @@ Remaining enforcement work before #1964 can ship:
   all 19 fixtures pass (/tmp/zccache-1964-abstract-effect-final.log).
   Previous production probe remains RED; reader callback analysis and production
   enforcement are not yet complete.
+
+### #1964 generic cleanup-effect substitution (2026-10-22)
+
+- Local effect summaries now retain concrete generic arguments and substitute
+  them into MIR call targets. Closure and function-item callbacks reached through
+  generic helpers retain their actual effects. Recursive summaries track both
+  defining symbol and arguments, with conservative UNKNOWN at bounded depth.
+- RED: generic_callback incorrectly rejected ordinary read I/O under a reader
+  permit (/tmp/zccache-1964-generic-effects-red.log). GREEN: that callback passes
+  while a sweep through the same generic FnOnce helper is denied. All 21 UI
+  fixtures pass (/tmp/zccache-1964-generic-effects-final.log).
