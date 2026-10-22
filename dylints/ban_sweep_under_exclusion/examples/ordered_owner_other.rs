@@ -48,4 +48,15 @@ fn custom(permit: PublicationReadPermit, cleanup: Cleanup, value: usize) {
     let _owner = Custom { permit, cleanup };
     checked(value);
 }
+fn explicit_reversed(permit: PublicationReadPermit, cleanup: Cleanup) {
+    drop(Reversed { cleanup, permit });
+}
+fn explicit_borrowed(
+    outside: &PublicationReadPermit,
+    permit: PublicationReadPermit,
+    cleanup: Cleanup,
+) {
+    drop(Ordered { permit, cleanup });
+    let _ = outside;
+}
 fn main() {}

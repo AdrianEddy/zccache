@@ -275,8 +275,10 @@ pub(super) fn context_env_deps_fresh(
 /// take the barrier's write side, so they cannot delete files or order an
 /// index removal ahead of an already-started hit.
 pub(super) struct CachedArtifactLookup {
-    cached: CachedArtifact,
+    // Field order releases publication before a last cached-record owner can
+    // recursively clean a private staging plan, including during unwind.
     _publication_guard: crate::core::sync::PublicationReadPermit,
+    cached: CachedArtifact,
 }
 
 impl CachedArtifactLookup {
@@ -285,8 +287,8 @@ impl CachedArtifactLookup {
         publication_guard: crate::core::sync::PublicationReadPermit,
     ) -> Self {
         Self {
-            cached,
             _publication_guard: publication_guard,
+            cached,
         }
     }
 }

@@ -139,7 +139,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         // Automatic destruction releases owned fields in declaration order. Its own
         // first guard must not be counted through later capture destruction.
         // Any borrowed or separately held guard still prevents this proof.
-        if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {
+        if let Some(place) = super::ordered_drop::owned_place(cx, body, terminator) {
             let value = place.ty(&body.local_decls, cx.tcx).ty;
             let all_inside = !borrowed[1]
                 && sets[1].iter().all(|guard| {

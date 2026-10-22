@@ -24,4 +24,15 @@ fn nested(permit: PublicationReadPermit, cleanup: Cleanup, value: usize) {
     let _owner = (Owner { permit, cleanup }, 0usize);
     checked(value);
 }
+fn explicit(permit: PublicationReadPermit, cleanup: Cleanup) {
+    drop(Owner { permit, cleanup });
+}
+fn alias(permit: PublicationReadPermit, cleanup: Cleanup) {
+    use std::mem::drop as release;
+    release(Owner { permit, cleanup });
+}
+fn item(permit: PublicationReadPermit, cleanup: Cleanup) {
+    let release = std::mem::drop::<Owner>;
+    release(Owner { permit, cleanup });
+}
 fn main() {}

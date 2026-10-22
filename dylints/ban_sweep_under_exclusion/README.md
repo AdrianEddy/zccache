@@ -42,6 +42,9 @@ or separately held guards retain normal checks. The exact private staged
 materialization lease facade has a reader role at its boundary; each lease
 holder is tracked without claiming that no other reader exists. Generic shared
 wrappers still do not establish an automatic release proof.
+The same proof applies to a moved value passed to resolved `core::mem::drop`,
+including aliases and function items. Borrowed values and unknown function
+pointers do not establish ownership transfer.
 
 The core publication facade distinguishes blocking commit permits from complete
 admission operations and async checkpoint/shutdown drains. The workspace gate

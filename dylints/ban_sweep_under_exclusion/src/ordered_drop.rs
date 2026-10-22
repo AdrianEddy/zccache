@@ -1,7 +1,32 @@
 //! Automatic field destruction can release owned exclusion before cleanup.
 use super::guard_types::Scope;
 use rustc_lint::LateContext;
-use rustc_middle::ty;
+use rustc_middle::{mir, ty};
+
+/// The resolved language drop function and MIR Drop both destroy an owned
+/// value. A borrowed value or unknown function pointer is not a release.
+pub(super) fn owned_place<'tcx>(
+    cx: &LateContext<'tcx>,
+    body: &mir::Body<'tcx>,
+    terminator: &mir::Terminator<'tcx>,
+) -> Option<mir::Place<'tcx>> {
+    match &terminator.kind {
+        mir::TerminatorKind::Drop { place, .. } => Some(*place),
+        mir::TerminatorKind::Call { func, args, .. } => {
+            let ty::FnDef(id, _) = *func.ty(&body.local_decls, cx.tcx).kind() else {
+                return None;
+            };
+            if super::canonical_path(cx, id) != "core::mem::drop" {
+                return None;
+            }
+            let mir::Operand::Move(place) = args.first()?.node else {
+                return None;
+            };
+            Some(place)
+        }
+        _ => None,
+    }
+}
 
 pub(super) fn safe<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope) -> bool {
     check(cx, value, scope, 0)
