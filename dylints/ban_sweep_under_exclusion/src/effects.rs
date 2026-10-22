@@ -237,6 +237,16 @@ pub(super) fn drop_value<'tcx>(
     summaries: &mut Vec<(DefId, ty::GenericArgsRef<'tcx>, Option<u8>)>,
     active: &mut Vec<ty::Ty<'tcx>>,
 ) -> u8 {
+    if matches!(value.kind(), ty::Alias(..)) {
+        if let Ok(normalized) = cx
+            .tcx
+            .try_normalize_erasing_regions(cx.typing_env(), ty::Unnormalized::new_wip(value))
+        {
+            if normalized != value {
+                return drop_value(cx, normalized, summaries, active);
+            }
+        }
+    }
     if active.contains(&value) {
         return 0;
     }
@@ -307,7 +317,7 @@ pub(super) fn drop_value<'tcx>(
             // Cancellation after suspension also drops initialized saved
             // locals. Include every possible state: the caller generally
             // cannot prove which poll state an owned future has reached.
-            if definition.is_local() {
+            if definition.is_local() || cx.tcx.is_mir_available(*definition) {
                 let body = cx.tcx.optimized_mir(*definition);
                 let saved = body
                     .coroutine
@@ -327,9 +337,7 @@ pub(super) fn drop_value<'tcx>(
             }
         }
         ty::Array(field, _) | ty::Slice(field) => drop_value(cx, *field, summaries, active),
-        ty::Alias(alias)
-            if matches!(alias.kind, ty::Opaque { .. }) && alias.kind.def_id().is_local() =>
-        {
+        ty::Alias(alias) if matches!(alias.kind, ty::Opaque { .. }) => {
             let hidden = cx
                 .tcx
                 .type_of(alias.kind.def_id())
