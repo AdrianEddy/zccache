@@ -49,14 +49,99 @@ For the on-disk record shape and the closed `miss_reason` enum, see
 
 ### Lock Ordering
 
-There is no nested locking. The design avoids situations where one lock is held while acquiring another:
+Data access and operation admission have separate synchronization boundaries:
 - DashMap lookups are point operations. The shard lock is released before any I/O.
 - The index writer's `flush()` does not hold DashMap shard locks across disk I/O.
 - The watcher thread never acquires DashMap locks directly; it sends events through a channel.
 
-This eliminates deadlock by design.
+Data guards must leave scope before asynchronous work. Publication, maintenance,
+and compile-admission permits can intentionally span awaits; their acquisition
+order still requires review.
 
 ---
+
+## Bounded synchronization and async state
+
+`zccache_core::sync::State<T>` owns mutable data shared by async tasks. Its
+`with_for(Duration, callback)` and `try_with_for(Duration, callback)` methods
+invoke a synchronous callback after bounded acquisition. The callback cannot
+await, return a borrowed guard, or return a future borrowing the state. Runtime
+doctor warnings, watcher registration, include caches, task slots, and download
+status use this boundary. Blocking loaders use `with_blocking_for`.
+
+`sync::Gate` serializes complete operations; its opaque permit retains the
+`Arc<Gate>` identity so weak per-key pools cannot replace a gate in use.
+A separate data-free gate coalesces initial staged-store lease acquisition
+without holding the weak-slot state mutex over filesystem waits.
+
+`sync::Barrier` supplies shared and
+exclusive publication/admission permits. These types contain no caller data.
+Their acquisition APIs require a `Duration`. Single-flight compiler/include
+probes, linker output exclusion, and disk maintenance use gates. Publication and
+resource admission use barriers. Cancellation of an acquisition drops its queue
+position. Shutdown rejects new publication before and after acquiring a permit.
+
+`blocking_sync::{Mutex, RwLock}` supplies synchronous locks with mandatory
+acquisition budgets. Poisoning remains visible to existing callers. The timed
+reader/writer adapter preserves writer preference: polling `try_write` alone
+would allow an arriving stream of readers to starve a writer. Default budgets
+are 15 seconds for state and 30 minutes for queued operations. Recoverable state
+and gate APIs return `LockTimeout`; essential acquisition expiry logs the caller
+and aborts the service so its supervisor can restart it. This is a deliberate
+failure mode, replacing a silent, unbounded stall.
+
+`zccache_core::wait` owns bounded channel sends/receives, thread joins, child waits,
+captured probes, file locks, and synchronous runtime bridges. Budgets are required
+arguments. Child/probe containment and captured-output readers stay with
+kernal-api. File-lock contention during eviction defers maintenance after two
+seconds; Clear and ordinary store-lock operations have a 30-second budget.
+
+`dylints/ban_unbounded_sync` registers two deny lints:
+
+- `ban_unbounded_sync` resolves APIs by DefId, rejecting raw std, Tokio,
+  kernal-api, and parking_lot lock access, raw blocking waits, and direct
+  blocking-lock acquisition in async bodies outside the adapter owners.
+- `ban_guard_across_await` inspects compiler coroutine witnesses for data guards,
+  including aliases, function-returned guards, and guards in generic containers.
+  It covers DashMap guards as well as mutex/reader-writer guards. Lexical scopes
+  release guards before suspension; explicit `drop` alone can leave storage in
+  the coroutine witness and is therefore insufficient for this rule.
+
+Only core's synchronization/wait adapters may use raw primitives. Test harnesses
+are exempt; each production crate is also linted without the test harness.
+Existing Dylint wiring runs the library on Linux, Windows and macOS selections.
+The facade compile-fail doctests and the lint's UI fixtures prove rejected shapes.
+Run the runtime regressions with `bosn run --task bounded-sync-test`.
+
+These boundaries prevent data guards from spanning awaits and require budgets
+for the covered lock/wait APIs. They do not prove arbitrary callbacks terminate,
+cancel a kernel syscall already running, or establish a global order between
+operation permits.
+
+### Soldr fixes audited (2026-09-01 through 2026-10-21)
+
+| PR | Status | Relevance here |
+|---|---|---|
+| [#3836](https://github.com/zackees/soldr/pull/3836) | Merged October 16 | Compiler `-vV` held spawn admission while waiting, creating a writer-preference cycle. Both probe paths here had the bug. |
+| [#3842](https://github.com/zackees/soldr/pull/3842) | Superseded by #3845 | Bounded lock facade, raw-lock Dylint and hold watchdog proposal. |
+| [#3843](https://github.com/zackees/soldr/pull/3843) | Superseded by #3845 | Vendored zccache audit, including maintenance holding publication exclusion while waiting on a foreign file lock. |
+| [#3844](https://github.com/zackees/soldr/pull/3844) | Superseded by #3845 | Mandatory timeout APIs for blocking waits and raw-wait enforcement. |
+| [#3845](https://github.com/zackees/soldr/pull/3845) | Merged October 17 | Combined the three prevention proposals and vendored fixes. The guard-free state API here additionally prevents data guards escaping to async callers. |
+| [#3849](https://github.com/zackees/soldr/pull/3849) | Merged October 17 | Updated vendored zccache to 1.15.5 while retaining bounded-wait fixes; routed its new PCH mutex through the guarded primitive. |
+| [#3825](https://github.com/zackees/soldr/pull/3825) | Merged October 16 | Related depgraph reentry deadlock; resolved OUT_DIR identity before acquiring the depgraph guard. That OUT_DIR work is already on this branch's base. |
+| [#3602](https://github.com/zackees/soldr/pull/3602) | Merged October 7 | Related executor starvation: moved blocking cook database work off Tokio workers and derived reply budgets from database busy timeouts. |
+| [#3199](https://github.com/zackees/soldr/pull/3199) | Merged September 13 | Related pipe deadlocks: drain output before waiting; new probes here retain kernal-api's bounded capture owner. |
+
+The existing inherited-writer publication check is the prerequisite from
+[soldr #3368](https://github.com/zackees/soldr/pull/3368): wait at publication
+for foreign fork-to-exec descriptor inheritance, rather than retain a spawn
+guard through the child's lifetime.
+
+The probe's shared spawn guard is private to `spawn_exclusion`; production
+callers receive only an opaque `SpawnAdmission` hook, acquired on the actor
+thread around native spawn. They cannot obtain the guard to retain around a
+child wait. Sync and async regression tests wait for child readiness, then prove
+an exclusive materializer can acquire while the probe is still running.
 
 ## Fingerprint watch-map lock discipline
 
@@ -804,3 +889,19 @@ get its own row plus a one-line justification here. The dylint catches
 unrooted `$TMPDIR` writes at compile time, but it cannot catch writes that
 hardcode an absolute path outside the cache root — those have to be caught
 in review against this section.
+
+### Follow-up audit of soldr timeout rules
+
+Soldr's `soldr-platform/src/platform/wait.rs` requires a timeout for channel
+send/receive, join, child wait/output/status, file locks, rendezvous barriers,
+and runtime bridges. Its sync facade additionally watches critical-section
+hold times; zccache's callback boundary currently bounds acquisition only.
+Raw blocking waits are denied here, including the kernal-api command runner
+whose optional timeout otherwise bypasses our mandatory `Duration` facade.
+Use bounded command capture for status as well; raw child output collection
+and untimed rendezvous barriers have no supported product entry point.
+
+This audit also found existing optional receive budgets in IPC and optional
+`DownloadWait` budgets. These are separate protocol/lifecycle APIs and remain
+to be migrated; the current lint does not establish that **all** async waiting
+functions require timeout arguments. Do not describe this guarantee as complete.

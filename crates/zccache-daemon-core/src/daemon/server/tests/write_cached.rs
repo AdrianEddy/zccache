@@ -58,7 +58,7 @@ fn cache_hit_materialization_waits_for_child_spawn() {
     // A semantic daemon child holds this guard from fork until exec. Keep it
     // held to make direct cache-hit materialization prove it uses the matching
     // exclusive side before opening the requested output for writing.
-    let spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
+    let spawn_guard = crate::daemon::spawn_exclusion::test_spawn_shared();
     let (started_tx, started_rx) = mpsc::sync_channel(1);
     let (done_tx, done_rx) = mpsc::sync_channel(1);
     // The writer owns its path while the parent retains this one for the

@@ -1397,3 +1397,75 @@ qualification remains required before publication.
 - [ ] Review the correction, rerun focused regressions and the full clean-tree local gate.
 - [ ] Merge and publish zccache 1.15.6 through the existing release workflow.
 - [ ] Replace FastLED's editable override with the published package, verify, and merge removal of local timestamp workarounds.
+
+# Bounded synchronization and async state (soldr#3836 / #3845)
+
+- [x] Inventory recent soldr PRs and compare the vendored fixes with this workspace.
+- [x] Fix compiler identity probes holding spawn admission while waiting.
+- [x] Introduce bounded synchronization/wait facades; keep data guards out of async code.
+- [x] Enforce the boundaries with resolved-symbol Dylint and compile-fail fixtures.
+- [x] Migrate affected callers and validate concurrency regressions and lint wiring.
+- [x] Document guarantees, exceptions and the upstream PR inventory.
+
+Validation: 1,287 isolated Rust tests and two compile-fail doctests passed across
+`bounded-sync-test` and `bounded-sync-contention-test`; all three new Dylint UI
+fixtures passed. Workspace Clippy passed with warnings denied. Full Dylint
+passed Linux, Windows MSVC and macOS source selections; wiring, cache-footprint,
+and kernal-api inventory checks passed. Host compiler checks used
+`SOLDR_RUSTC_WRAPPER=none` to diagnose/bypass the installed soldr 0.9.35 stall;
+isolated runtime tests used the normal soldr wrapper.
+
+## Soldr mandatory-timeout audit
+
+- [x] Compare soldr's complete raw-wait denylist and timeout-only wait facade.
+- [x] Add the missing bounded channel send, preserving unsent values.
+- [x] Remove nonexistent replacement suggestions from lint diagnostics.
+- [x] Reject kernal-api's optional-timeout command-runner bypass; move both product callers behind the required-Duration facade.
+- [x] Document optional IPC/download budgets and missing hold watchdog as remaining gaps, rather than claiming all async waits are bounded.
+- [x] Verify audit changes: workspace/all-target compilation; all 11 Dylints across Linux, Windows and macOS source selections; 3 lint UI fixtures; isolated bounded-send regression; architecture and lint wiring checks.
+
+# Sequential implementation of meta issue #1960
+
+Use this checkout only. Complete and merge each child PR before starting the
+next child, then sync/rebase against origin/main and leave a clean tree.
+
+- [ ] #1961 bounded state/probe facade migration: finish review, required gate and merge.
+- [ ] #1962 holder watchdog and diagnostics.
+- [ ] #1963 bounded generic process liveness.
+- [ ] #1964 detach staged deletion from publication exclusion.
+- [ ] #1965 durable-entry payload demotion.
+- [ ] #1966 default eligible native/link/exec staging.
+- [ ] #1967 complete timeout/feature enforcement.
+- [ ] #1968 HTTP budget owner and Dylint.
+- [ ] #1969 canonical owned environment flags.
+- [ ] #1970 retained helper diagnostics and Dylint.
+- [ ] #1971 terminating test budgets and owned test children.
+
+#1961 review found and corrected blocking Barrier writer starvation, a staged
+weak-slot mutex held over a longer file-lock wait, and download feature guard
+lifetimes. The probe regressions were replayed against the actual HEAD probe
+functions (only spawn_shared visibility adapted to compile the old path) and
+both failed with the expected held-admission assertion. Restored current code
+before GREEN validation. The Barrier and weak-slot regressions likewise failed
+before their repairs. Full clean-tree qualification and publication remain open.
+
+Final primary review is clean. Probe tests (2), queued blocking Barrier writer
+(1), and staged weak-slot scope (1) all have focused RED -> GREEN evidence.
+Explicit download-daemon Dylint initially rejected attachment guards and now
+passes with owned job snapshots; membership/client-count ordering is preserved.
+The daemon-only Clippy selection exposed an existing unused client-connect
+warning, so final Clippy validation selects the combined product feature set.
+
+The first full clean-tree gate passed lint, Python, MSRV, docs and cross-OS
+Dylint lanes, but integration exposed two regressions: weak gate ownership
+allowed overlapping link operations, and concurrent staged initialization took
+duplicate OS leases. Opaque permits now retain the outer gate owner; a separate
+data-free initialization gate coalesces staged leases outside the state mutex.
+The weak-owner test failed before the repair; core synchronization tests and
+both unchanged integration assertions pass afterward. Full gate rerun pending.
+
+The correction gate passed all five non-integration lanes. Integration setup
+repeatedly failed before tests on GitHub anonymous latest-release rate limits.
+Pin setup-uv in the existing CI/integration workflows to verified uv 0.12.13
+(the host version), removing the latest-release lookup without skipping tests.
+Rerun the gate for the changed tree before publication.

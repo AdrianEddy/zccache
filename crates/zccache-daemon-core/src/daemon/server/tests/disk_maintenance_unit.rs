@@ -209,7 +209,7 @@ fn read_only_maintenance_scan_does_not_exclude_cache_hit_leases() {
     let artifacts = DashMap::new();
     let store = ArtifactStore::open_empty(&root.path().join("index.bin"));
     let dep_graph = DepGraph::new();
-    let publication_barrier = Arc::new(kernal_api::async_engine::RwLock::new(()));
+    let publication_barrier = Arc::new(crate::core::sync::Barrier::new());
     let environment = GatedScanEnvironment {
         now: SystemTime::UNIX_EPOCH + 100 * DAY,
         calls: std::sync::atomic::AtomicUsize::new(0),
@@ -793,7 +793,11 @@ async fn issue_1148_shutdown_waits_for_running_maintenance() {
     })
     .await
     .unwrap();
-    let publication_guard = daemon.state.artifact_publication.read().await;
+    let publication_guard = daemon
+        .state
+        .artifact_publication
+        .read_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     let maintenance_daemon = Arc::clone(&daemon);
     let maintenance = tokio::spawn(async move {
         maintenance_daemon

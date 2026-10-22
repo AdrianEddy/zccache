@@ -126,7 +126,13 @@ pub(crate) fn run_async(future: impl std::future::Future<Output = ExitCode>) -> 
         .enable_all()
         .build()
         .expect("failed to create tokio runtime");
-    rt.block_on(future)
+    match crate::core::wait::block_on_for(&rt, future, crate::core::wait::WHOLE_COMMAND) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("command exceeded its runtime budget: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 pub(crate) fn format_uptime(secs: u64) -> String {

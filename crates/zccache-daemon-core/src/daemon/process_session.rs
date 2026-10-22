@@ -718,9 +718,7 @@ fn compiler_post_exit_grace() -> Option<std::time::Duration> {
 /// Construct the actor-thread admission hook required to protect staged
 /// materialization descriptors during every semantic session fork/exec.
 fn kernel_spawn_admission() -> kernal_api::SpawnAdmission {
-    kernal_api::SpawnAdmission::new(|| {
-        Ok::<_, io::Error>(crate::daemon::spawn_exclusion::spawn_shared())
-    })
+    crate::daemon::spawn_exclusion::spawn_admission()
 }
 
 /// The semantic session builder, unlike the legacy Tokio bridge, owns the

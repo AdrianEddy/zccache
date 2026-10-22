@@ -13,7 +13,9 @@ Custom Rust lints used by this workspace.
 - `enforce_platform_boundary`: confines host-platform cfg/native APIs to approved product adapters over kernal-api, pre-expansion, with a ratcheting exact-occurrence baseline (#1365 / #1366).
 - `ban_registered_env_read`: confines environment access to registered, auditable call sites.
 
-All ten libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
+- `ban_unbounded_sync`: requires bounded lock/wait facades and rejects data guards retained across await.
+
+All eleven libraries use Dylint 6.0.3 and the pinned `nightly-2026-05-28`
 toolchain. Soldr downloads the published tools and driver. Each crate uses
 `dylint-link` to emit the toolchain-suffixed library Dylint expects.
 

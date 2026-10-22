@@ -77,8 +77,8 @@ pub(super) struct SharedState {
     /// The scan attributes every changed sibling to one link invocation, so
     /// two managed links must not overlap their snapshot/link/capture windows
     /// in the same directory. Weak values let idle directory locks disappear.
-    pub(super) link_output_locks: DashMap<NormalizedPath, std::sync::Weak<Mutex<()>>>,
-    pub(super) system_includes: Mutex<SystemIncludeCache>,
+    pub(super) link_output_locks: DashMap<NormalizedPath, std::sync::Weak<Gate>>,
+    pub(super) system_includes: AsyncState<SystemIncludeCache>,
     /// Single-flight gates for system-include discovery, keyed by compiler
     /// path (FastLED/fbuild#1466).
     pub(super) system_include_probes: KeyedLocks,
@@ -108,9 +108,9 @@ pub(super) struct SharedState {
     /// the fallback (correct but slower).
     pub(super) cache_system: CacheSystem,
     /// File watcher for proactive metadata invalidation.
-    pub(super) watcher: Mutex<Option<NotifyWatcher>>,
+    pub(super) watcher: AsyncState<Option<NotifyWatcher>>,
     /// Directories currently being watched (avoid duplicate watches).
-    pub(super) watched_dirs: Mutex<HashSet<NormalizedPath>>,
+    pub(super) watched_dirs: AsyncState<HashSet<NormalizedPath>>,
     /// Shutdown signal — shared so request handlers can trigger shutdown.
     pub(super) shutdown: Arc<kernal_api::async_engine::Notify>,
     /// Epoch seconds of last client activity (for idle timeout).
@@ -216,7 +216,7 @@ pub(super) struct SharedState {
     pub(super) in_flight_bytes: AtomicUsize,
     /// Serializes background and host-requested disk-maintenance passes for
     /// this exact cache root.
-    pub(super) disk_maintenance: Mutex<()>,
+    pub(super) disk_maintenance: Arc<Gate>,
     /// Outcome of every pass the background maintenance loop finishes (#1846).
     pub(super) disk_maintenance_progress: tokio::sync::watch::Sender<DiskMaintenanceProgress>,
     /// Serializes every depgraph snapshot for this exact cache root. The guard
@@ -225,12 +225,14 @@ pub(super) struct SharedState {
     pub(super) depgraph_persistence: StdMutex<()>,
     /// Shared by publishers and exclusively owned by maintenance/Clear from
     /// cache-file mutation through index/live-map mutation.
-    pub(super) artifact_publication: Arc<kernal_api::async_engine::RwLock<()>>,
+    pub(super) artifact_publication: Arc<crate::core::sync::Barrier>,
     /// Reuses one shared OS staged-store lock for all active staged deliveries
     /// in this daemon and cache root. The final lease drop releases it, letting
     /// cross-process maintenance acquire the exclusive lock.
     pub(super) staged_materialization_lock:
         Arc<StdMutex<std::sync::Weak<StagedMaterializationLock>>>,
+    /// Coalesces initial shared-store acquisition without holding state over I/O.
+    pub(super) staged_materialization_init: Arc<Gate>,
     /// Limits concurrent disk persistence tasks to prevent memory pileup
     /// when disk I/O is slow and compilation requests are fast.
     pub(super) persist_semaphore: Arc<tokio::sync::Semaphore>,
@@ -359,7 +361,7 @@ pub(super) struct SharedState {
     /// mismatch, corrupt header, or unexpected I/O error). The string is
     /// emitted once per session into the per-session log (`last-session.log`)
     /// at `SessionStart` time so the cold fallback is never silent. Issue #320.
-    pub(super) depgraph_load_warning: StdMutex<Option<String>>,
+    pub(super) depgraph_load_warning: AsyncState<Option<String>>,
     /// In-flight `Request::GenericToolExec` coalescing map (issue #272).
     ///
     /// Concurrent callers with the same exec cache key share a `Notify` here:
@@ -435,7 +437,7 @@ impl SharedState {
     ) -> T {
         let _guard = self
             .depgraph_persistence
-            .lock()
+            .lock_for(crate::core::sync::STATE_TIMEOUT)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         save(&self.dep_graph.load_full())
     }
@@ -453,19 +455,19 @@ impl SharedState {
     ///
     /// The returned `Arc` is independent of the DashMap entry guard so callers
     /// can await `lock_owned` without retaining a map shard lock.
-    pub(super) fn link_output_lock(&self, output_dir: NormalizedPath) -> Arc<Mutex<()>> {
+    pub(super) fn link_output_lock(&self, output_dir: NormalizedPath) -> Arc<Gate> {
         match self.link_output_locks.entry(output_dir) {
             dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                 if let Some(lock) = entry.get().upgrade() {
                     lock
                 } else {
-                    let lock = Arc::new(Mutex::new(()));
+                    let lock = Arc::new(Gate::new());
                     entry.insert(Arc::downgrade(&lock));
                     lock
                 }
             }
             dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let lock = Arc::new(Mutex::new(()));
+                let lock = Arc::new(Gate::new());
                 entry.insert(Arc::downgrade(&lock));
                 lock
             }

@@ -737,7 +737,7 @@ fn maintain_disk_artifacts(pass: MaintenancePass<'_>) -> io::Result<DiskMaintena
 // has queued (zccache#1775). `None` in tests that don't exercise shutdown.
 fn maintain_disk_artifacts_with_barrier(
     pass: MaintenancePass<'_>,
-    publication_barrier: Option<&Arc<kernal_api::async_engine::RwLock<()>>>,
+    publication_barrier: Option<&Arc<crate::core::sync::Barrier>>,
     shutdown_requested: Option<&AtomicBool>,
 ) -> io::Result<DiskMaintenanceReport> {
     let MaintenancePass {
@@ -827,7 +827,8 @@ fn maintain_disk_artifacts_with_barrier(
             // short destructive commit, then refresh live access and re-plan
             // under the writer so a hit/publication that raced the scan is
             // not evicted as stale.
-            let _publication_guard = publication_barrier.blocking_write();
+            let _publication_guard =
+                publication_barrier.blocking_write_for(crate::core::sync::OPERATION_TIMEOUT);
             refresh_live_access(&mut scanned, artifacts, dep_graph, now);
             let commit_space = environment.filesystem_space(artifact_dir)?;
             let commit_plan = plan_maintenance_at_least(
@@ -951,7 +952,7 @@ pub(super) async fn maintain_state_disk(
     kind: MaintenanceKind,
     runtime_handle: Option<&kernal_api::async_engine::RuntimeHandle>,
 ) -> io::Result<DiskMaintenanceReport> {
-    let _maintenance_guard = state.disk_maintenance.lock().await;
+    let _maintenance_guard = state.disk_maintenance.acquire_for(OPERATION_TIMEOUT).await;
     if state.shutdown_requested.load(Ordering::Acquire) {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,

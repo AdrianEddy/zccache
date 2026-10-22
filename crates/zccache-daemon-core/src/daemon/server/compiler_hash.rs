@@ -87,15 +87,11 @@ struct ProbeOutput {
 /// bound the sync `-vV` probe. Capture, descendant containment, reader
 /// cancellation, and the aggregate byte limit all belong to kernal-api.
 fn output_within(cmd: kernal_api::SpawnSpec, timeout: std::time::Duration) -> ProbeOutcome {
-    const PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
-
-    // zccache#1562: running-process owns spawn *and* wait here, so the shared
-    // materialization/spawn guard has to bracket the whole bounded run rather
-    // than the spawn alone. A shared guard only blocks materialization (the
-    // exclusive side), never other spawns; this probe is a cold path taken
-    // once per compiler identity, normally ~10 ms, and bounded by `timeout`.
-    let _spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
-    match kernal_api::run_bounded_command(cmd, Some(timeout), PROBE_OUTPUT_LIMIT) {
+    // Never hold spawn admission while waiting for a child (soldr#3836).
+    // A queued materializer blocks the actor's later read acquisition, which
+    // prevents it from answering this probe. await_publishable covers foreign
+    // spawners' inherited writable descriptors after publication.
+    match zccache_core::wait::output_for(cmd, timeout) {
         Ok(output) => ProbeOutcome::Completed(ProbeOutput {
             success: output.exit.raw_code() == 0,
             stdout: output.stdout,
@@ -109,24 +105,26 @@ async fn output_within_async(
     cmd: kernal_api::SpawnSpec,
     timeout: std::time::Duration,
 ) -> ProbeOutcome {
-    const PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
-
-    // Keep the shared spawn/materialization exclusion inside the blocking
-    // operation. Holding its synchronous guard across `.await` would make the
-    // async probe non-Send and, more importantly, would not cover the actual
-    // native child creation on the kernel blocking lane.
-    match kernal_api::async_engine::launch_blocking(move || {
-        let _spawn_guard = crate::daemon::spawn_exclusion::spawn_shared();
-        kernal_api::run_bounded_command(cmd, Some(timeout), PROBE_OUTPUT_LIMIT)
-    })
-    .await
-    {
-        Ok(Ok(output)) => ProbeOutcome::Completed(ProbeOutput {
-            success: output.exit.raw_code() == 0,
+    // The canonical session acquires admission on the process actor only
+    // around native spawn, then releases it before waiting for the child.
+    // Erase the future type to keep the compile pipeline's Send check finite.
+    let probe: std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::io::Result<std::process::Output>> + Send>,
+    > = Box::pin(
+        crate::daemon::process::async_builder_output_with_priority_timeout(
+            cmd,
+            crate::daemon::process::CompilePriority::Normal,
+            timeout,
+            "compiler identity probe".to_string(),
+        ),
+    );
+    match probe.await {
+        Ok(output) => ProbeOutcome::Completed(ProbeOutput {
+            success: output.status.success(),
             stdout: output.stdout,
         }),
-        Ok(Err(kernal_api::BoundedProcessError::TimedOut)) => ProbeOutcome::TimedOut,
-        Ok(Err(_)) | Err(_) => ProbeOutcome::SpawnFailed,
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => ProbeOutcome::TimedOut,
+        Err(_) => ProbeOutcome::SpawnFailed,
     }
 }
 
@@ -280,7 +278,7 @@ impl CompilerHashCache {
         // FastLED/fbuild#1466: single-flight the `--version` probe per path
         // so a cold burst of compiles spawns it once; waiters re-check.
         let probe_gate = self.probes.get(&key);
-        let _probe_guard = probe_gate.lock_owned().await;
+        let _probe_guard = probe_gate.acquire_for(OPERATION_TIMEOUT).await;
         let previous = self.entries.get(&key).map(|entry| entry.clone());
         if let Some(entry) = &previous {
             if entry.mtime == mtime && entry.size == size {
@@ -924,3 +922,7 @@ mod dirty_flag_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/compiler_probe_spawn_guard.rs"]
+mod probe_spawn_guard_tests;

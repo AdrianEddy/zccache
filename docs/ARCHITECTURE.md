@@ -14,7 +14,7 @@ This document is the index for zccache's architecture specification. Each subsys
 | [architecture/rust-artifact-plan.md](architecture/rust-artifact-plan.md) | ~120 | Rust plan ownership, thin/full semantics, restore hardening, backends, diagnostics, CLI contract |
 | [architecture/embedded-service.md](architecture/embedded-service.md) | ~290 | Embedded service MVP boundary, audit continuity, soldr/fbuild integration design |
 | [architecture/target-cache.md](architecture/target-cache.md) | ~70 | Legacy action target snapshot ownership, outputs, and rust-plan boundary |
-| [architecture/runtime.md](architecture/runtime.md) | ~130 | Concurrency model, correctness guarantees, failure modes, crash recovery |
+| [architecture/runtime.md](architecture/runtime.md) | ~130 | Concurrency, bounded synchronization, guard-free async state, crash recovery |
 | [architecture/portability.md](architecture/portability.md) | ~200 | Platform differences, kernal-api boundary, path handling, file identity, future extensions |
 | [architecture/kernal-api-migration.md](architecture/kernal-api-migration.md) | ~80 | Phase-0 kernal-api migration inventory, contracts, and measurement protocol |
 

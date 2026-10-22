@@ -11,8 +11,13 @@ use super::*;
 /// index task has stopped.
 pub(super) async fn begin_artifact_publication(
     state: &SharedState,
-) -> Option<kernal_api::async_engine::OwnedRwLockReadGuard<()>> {
-    let guard = Arc::clone(&state.artifact_publication).read_owned().await;
+) -> Option<crate::core::sync::ReadPermit> {
+    if state.shutdown_requested.load(Ordering::Acquire) {
+        return None;
+    }
+    let guard = Arc::clone(&state.artifact_publication)
+        .read_for(crate::core::sync::OPERATION_TIMEOUT)
+        .await;
     if state.shutdown_requested.load(Ordering::Acquire) {
         None
     } else {
@@ -23,8 +28,10 @@ pub(super) async fn begin_artifact_publication(
 /// Blocking-worker counterpart to [`begin_artifact_publication`].
 pub(super) fn begin_artifact_publication_blocking(
     state: &SharedState,
-) -> Option<kernal_api::async_engine::RwLockReadGuard<'_, ()>> {
-    let guard = state.artifact_publication.blocking_read();
+) -> Option<crate::core::sync::ReadPermit> {
+    let guard = state
+        .artifact_publication
+        .blocking_read_for(crate::core::sync::OPERATION_TIMEOUT);
     if state.shutdown_requested.load(Ordering::Acquire) {
         None
     } else {
@@ -269,14 +276,11 @@ pub(super) fn context_env_deps_fresh(
 /// index removal ahead of an already-started hit.
 pub(super) struct CachedArtifactLookup {
     cached: CachedArtifact,
-    _publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
+    _publication_guard: crate::core::sync::ReadPermit,
 }
 
 impl CachedArtifactLookup {
-    fn new(
-        cached: CachedArtifact,
-        publication_guard: kernal_api::async_engine::OwnedRwLockReadGuard<()>,
-    ) -> Self {
+    fn new(cached: CachedArtifact, publication_guard: crate::core::sync::ReadPermit) -> Self {
         Self {
             cached,
             _publication_guard: publication_guard,

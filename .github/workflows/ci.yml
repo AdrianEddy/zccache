@@ -104,6 +104,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Avoid the anonymous latest-release API lookup in isolated replay.
+          version: "0.12.13"
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
       - uses: zackees/setup-soldr@v0 # v0.9.82 or later (floating major)
@@ -143,6 +146,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Avoid the anonymous latest-release API lookup in isolated replay.
+          version: "0.12.13"
       - name: Wait for current-main cache pre-prune
         uses: ./.github/actions/wait-cache-pre-prune
       - id: setup-soldr
@@ -263,6 +269,14 @@ jobs:
           export RUSTC="$(soldr rustup which --toolchain nightly-2026-05-28 rustc)"
           export RUSTUP_TOOLCHAIN=nightly-2026-05-28
           soldr rustup run nightly-2026-05-28 cargo test --manifest-path dylints/ban_dashmap_guard_across_blocking/Cargo.toml
+      - name: Test Dylint Library (ban_unbounded_sync)
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/dylint-library-tests
+        run: |
+          export PATH="${DYLINT_CARGO_SHIM}:${PATH}"
+          export RUSTC="$(soldr rustup which --toolchain nightly-2026-05-28 rustc)"
+          export RUSTUP_TOOLCHAIN=nightly-2026-05-28
+          soldr rustup run nightly-2026-05-28 cargo test --manifest-path dylints/ban_unbounded_sync/Cargo.toml
       - name: Check Dylint Library Formatting (ban_discarded_write_result)
         run: soldr cargo fmt --manifest-path dylints/ban_discarded_write_result/Cargo.toml --all -- --check
       - name: Test Dylint Library (ban_discarded_write_result)

@@ -318,3 +318,18 @@ act's cache server has no budget. Lesson: copy workflow precedent only from
 current `main`, and run `ci/check_cache_footprint.py` after every workflow
 edit. Never treat a local act cache hit as evidence that a GitHub cache
 family is wanted.
+
+## 2026-10-21 bounded synchronization must preserve writer preference
+
+Polling `std::sync::RwLock::try_write` never joins the native writer queue.
+Continuous readers can therefore starve a timed writer even where the original
+blocking acquisition had writer preference. Publish writer intent before polling
+and keep later readers out until queued writers acquire. Preserve poisoning as
+well: recovering a half-mutated cache silently can change hit correctness. The
+queued-writer unit test and the artifact put/clear race cover these contracts.
+
+Async state should expose synchronous callbacks rather than data guards. Use
+separate unit-only permits for operations that must span awaits, and keep child
+spawn guards private behind actor-thread admission hooks. Compiler coroutine
+witnesses catch retained guards behind aliases and local wrappers; lexical
+scopes also avoid the explicit-drop storage false positives.
