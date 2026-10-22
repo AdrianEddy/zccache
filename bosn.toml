@@ -205,3 +205,7 @@ cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --featur
 [task.publication-miss-regressions]
 stack = "gate"
 cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib staged_publication_diagnostic_tests --locked && CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib compile_multi --locked"
+
+[task.error-verdict-regressions]
+stack = "gate"
+cmd = "CARGO_TARGET_DIR=/target soldr cargo test -p zccache-daemon-core --features test-support --lib error_cache --locked"
