@@ -1,5 +1,8 @@
 //! Identity-safe provisional removal and durable Rust verdict merging.
-use super::*;
+use super::{
+    enqueue_index_insert, send_staged_index_insert, ArtifactIndex, CachedArtifact, SharedState,
+    StagedPublishFailure,
+};
 
 pub(super) fn remove_provisional_artifact(
     state: &SharedState,

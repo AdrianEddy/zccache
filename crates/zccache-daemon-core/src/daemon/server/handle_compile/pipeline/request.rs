@@ -1,5 +1,22 @@
 //! Compile request orchestration and terminal response handling.
-use super::*;
+use super::{
+    await_artifact_publication_if_needed, begin_prepared_request, build_compile_context_async,
+    cc_requires_worktree_salt, certified_rustc_out_dir, diag_path_remap_state,
+    discover_request_system_includes, hash_and_verify, hash_file,
+    invalidate_missing_depgraph_artifact, journal_proves_fresh,
+    materialize_cached_compile_hit_offloaded, maybe_store_rustc_error_artifact,
+    miss_reason_for_verdict, parse_single_compile_request, prepare_request_arguments,
+    record_context_key, record_dylint_input_hash, record_miss_reason, record_session_stat,
+    request_cache_input_paths, run_compile_exec, run_compiler_direct, rust_remap_gate,
+    rustc_context_key_root, rustc_env_dep_value, rustc_expected_output_paths,
+    store_successful_compile, try_depgraph_cached_hit, try_fast_hit, try_request_cache_hit,
+    wait_for_startup_depgraph_load, write_session_log, Arc, BuildContextResult, CachedHitFailure,
+    CachedHitPhases, CompileExecOutcome, CompileExecRequest, CompileExecResult, CompileRequest,
+    DependencyDiscoveryMode, DepgraphHitProbe, FastHitProbe, HashSourceOutcome, HashVerifyInput,
+    HashVerifyOutcome, NormalizedPath, OwnedCachedHitMaterializeRequest, ParsedRequestArguments,
+    ParsedSingleRequest, Path, RequestCacheHitProbe, Response, RustRemapGate, StagedCompilePlan,
+    StoreOutcomeRequest, SystemIncludesOutcome, UserDepFlags, RUST_MISS_PROFILE_ENV,
+};
 
 /// Handle a Compile request: parse args, check depgraph, run compiler or return cached.
 pub(in crate::daemon::server::handle_compile) async fn handle_compile_request(

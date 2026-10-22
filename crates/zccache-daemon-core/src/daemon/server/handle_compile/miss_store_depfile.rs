@@ -1,5 +1,8 @@
 //! Private depfile sources retained through detached publication.
-use super::*;
+use super::{
+    bind_depfile_to_root, canonicalize_depfile_root, names_unrewritten_root_path, NormalizedPath,
+    Path,
+};
 
 /// Store the captured user depfile with its key root made logical.
 ///
