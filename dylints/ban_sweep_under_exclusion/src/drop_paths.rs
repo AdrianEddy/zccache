@@ -11,6 +11,7 @@ pub(super) fn live_types<'tcx>(
     let mut result = Vec::new();
     visit(
         cx,
+        body,
         place.ty(&body.local_decls, cx.tcx).ty,
         place,
         &initialized,
@@ -21,6 +22,7 @@ pub(super) fn live_types<'tcx>(
 
 fn visit<'tcx>(
     cx: &LateContext<'tcx>,
+    body: &mir::Body<'tcx>,
     value: ty::Ty<'tcx>,
     place: mir::Place<'tcx>,
     initialized: &impl Fn(mir::Place<'tcx>) -> bool,
@@ -39,7 +41,11 @@ fn visit<'tcx>(
                 && !(cx.tcx.crate_name(adt.did().krate).as_str() == "core"
                     && cx.tcx.item_name(adt.did()).as_str() == "ManuallyDrop")
             {
+                let known = super::drop_variants::known(body, place);
                 for (variant, definition) in adt.variants().iter_enumerated() {
+                    if known.is_some_and(|known| known != variant) {
+                        continue;
+                    }
                     let base = if adt.is_enum() {
                         place
                             .project_deeper(&[mir::ProjectionElem::Downcast(None, variant)], cx.tcx)
@@ -50,6 +56,7 @@ fn visit<'tcx>(
                         let field = field.ty(cx.tcx, args).skip_norm_wip();
                         visit(
                             cx,
+                            body,
                             field,
                             base.project_deeper(
                                 &[mir::ProjectionElem::Field(index, field)],
@@ -62,9 +69,10 @@ fn visit<'tcx>(
                 }
             }
         }
-        ty::Tuple(fields) => visit_fields(cx, fields.iter(), place, initialized, result),
+        ty::Tuple(fields) => visit_fields(cx, body, fields.iter(), place, initialized, result),
         ty::Closure(_, args) => visit_fields(
             cx,
+            body,
             args.as_closure().upvar_tys().iter(),
             place,
             initialized,
@@ -75,6 +83,7 @@ fn visit<'tcx>(
 }
 fn visit_fields<'tcx>(
     cx: &LateContext<'tcx>,
+    body: &mir::Body<'tcx>,
     fields: impl Iterator<Item = ty::Ty<'tcx>>,
     place: mir::Place<'tcx>,
     initialized: &impl Fn(mir::Place<'tcx>) -> bool,
@@ -88,6 +97,6 @@ fn visit_fields<'tcx>(
             )],
             cx.tcx,
         );
-        visit(cx, field, place, initialized, result);
+        visit(cx, body, field, place, initialized, result);
     }
 }

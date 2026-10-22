@@ -12,6 +12,7 @@ mod cleanup_owners;
 mod completed_future;
 mod detach_policy;
 mod drop_paths;
+mod drop_variants;
 mod effects;
 mod guard_analysis;
 mod guard_escapes;
