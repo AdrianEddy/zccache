@@ -301,3 +301,50 @@ fn retirement_exit_child() {
     // The parent reopens the same store, publishes again, and retries recovery.
     std::process::exit(86);
 }
+
+#[test]
+fn eviction_revalidates_a_generation_replaced_while_commit_waits() {
+    use super::super::{
+        load_staged_artifact_paths, persist_staged_artifact_paths, StagedHookGuard, StagedHookPoint,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let artifact_dir = directory.path().join("artifacts");
+    fs::create_dir_all(&artifact_dir).unwrap();
+    let source = directory.path().join("source");
+    let key = "e".repeat(64);
+    fs::write(&source, b"old").unwrap();
+    let sources = [crate::core::NormalizedPath::new(&source)];
+    persist_staged_artifact_paths(&artifact_dir, &key, &sources).unwrap();
+    let old = scan_staged_disk_artifacts(&artifact_dir)
+        .unwrap()
+        .remove(0)
+        .generation;
+    let expected = HashMap::from([(key.clone(), old.clone())]);
+    let hook = StagedHookGuard::arm(&artifact_dir, StagedHookPoint::MaintenanceStoreLockPending);
+    let worker_dir = artifact_dir.clone();
+    let worker = std::thread::spawn(move || {
+        detach_staged_artifact_keys_if_unchanged(&worker_dir, &expected, Duration::from_secs(2))
+    });
+    hook.wait_until_reached_for(Duration::from_secs(10));
+    fs::write(&source, b"new").unwrap();
+    // The first nondeterministic replacement invalidates the old key. A later
+    // publication may then establish a fresh generation under that same key.
+    assert!(persist_staged_artifact_paths(&artifact_dir, &key, &sources).is_err());
+    persist_staged_artifact_paths(&artifact_dir, &key, &sources).unwrap();
+    let new = fs::read_to_string(pointer_path(&artifact_dir, &key)).unwrap();
+    assert_ne!(old.as_deref(), Some(new.trim()));
+    hook.resume();
+    let detached = crate::core::wait::join_for(worker, Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        detached.removed.is_empty(),
+        "stale scan retired a replacement generation"
+    );
+    detached.trash.sweep_for(Duration::from_secs(2)).unwrap();
+    let paths = load_staged_artifact_paths(&artifact_dir, &key, &[3])
+        .unwrap()
+        .unwrap();
+    assert_eq!(fs::read(&paths[0]).unwrap(), b"new");
+}

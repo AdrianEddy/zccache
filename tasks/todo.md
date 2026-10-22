@@ -1692,3 +1692,24 @@ Remaining #1964 work:
   (`/tmp/zccache-1964-kv-process-recovery.log`).
 - Next: maintenance global writer/cancellation regression, explicit generation
   replacement race, then semantic Dylint enforcement and final PR gates.
+
+
+### #1964 maintenance cancellation and generation-race evidence (2026-10-22)
+
+- A real expired-generation maintenance pass pauses its recursive sweep after
+  destructive commit. The regression verifies the old entry is unreachable and
+  the global publication writer is released, then cancels the request. RED
+  exposed premature maintenance-permit release
+  (`/tmp/zccache-1964-maintenance-cancel-red.log`).
+- The blocking worker now owns the permit and returns it with its result.
+  Cancellation cannot release it mid-cleanup; normal completion still retains
+  it through the WAL acknowledgement. All 94 focused regressions passed
+  (`/tmp/zccache-1964-maintenance-cancel-green.log`).
+- A separate deterministic race pauses eviction between scan and native-store
+  acquisition, replaces the generation under the same key, resumes commit, and
+  proves stale eviction leaves the new pointer/payload intact. All nine sweep
+  regressions passed, with the explicitly parent-invoked child fixture ignored
+  by the outer harness (`/tmp/zccache-1964-replacement-race.log`).
+- Primary remaining #1964 work: implement/register semantic deny-level Dylint
+  with alias/UFCS/function-item and live-guard coverage, typed capabilities as
+  needed, cross-OS/features, docs/review/full gate, PR merge and main rebase.

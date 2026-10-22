@@ -341,3 +341,14 @@ from a checker that recurses through local fields only. Test against the real
 consumer dependency and classify the wrapper by its resolved defining module
 and type. Include aliases, concrete wrappers and unit-valued native guards;
 only separately owned data-free operation permits may survive suspension.
+
+
+## #1964: cancellation ownership and retention fixtures
+
+- A blocking worker must own the operation permit for the entire native
+  transaction. Holding the permit only in its awaiting request releases it
+  immediately on cancellation while native cleanup continues. Return the permit
+  with the result if the caller must retain it through a final acknowledgement.
+- A staged generation's observed age includes directory mtimes. Retention
+  fixtures must age directories after their children as well as payload and
+  pointer files; aging only files never reaches expiration-based eviction.

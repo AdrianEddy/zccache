@@ -8,7 +8,7 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
     kind: MaintenanceKind,
     runtime_handle: Option<&kernal_api::async_engine::RuntimeHandle>,
 ) -> io::Result<DiskMaintenanceReport> {
-    let _maintenance_guard = state.disk_maintenance.acquire_for(OPERATION_TIMEOUT).await;
+    let maintenance_guard = state.disk_maintenance.acquire_for(OPERATION_TIMEOUT).await;
     if state.shutdown_requested.load(Ordering::Acquire) {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -20,34 +20,41 @@ pub(in crate::daemon::server) async fn maintain_state_disk(
     let maintenance_index_writer_tx = index_writer_tx.clone();
     let pending_write_bytes = state.in_flight_bytes.load(Ordering::Relaxed) as u64;
     let maintenance_state = Arc::clone(&state);
-    let report = launch_maintenance_blocking(runtime_handle, move || {
-        let dep_graph = maintenance_state.dep_graph.load_full();
-        let mut report = maintain_disk_artifacts_with_barrier(
-            MaintenancePass {
-                artifact_dir: maintenance_state.artifact_dir.as_path(),
-                artifacts: &maintenance_state.artifacts,
-                artifact_store: &maintenance_state.artifact_store,
-                index_writer_tx: Some(&maintenance_index_writer_tx),
-                dep_graph: &dep_graph,
-                pending_write_bytes,
-                policy,
-                kind,
-                environment: &RealMaintenanceEnvironment,
-                retired_top_level: versioned_top_level(maintenance_state.cache_dir.as_path()),
-            },
-            Some(&maintenance_state.artifact_publication),
-            Some(&maintenance_state.shutdown_requested),
-        )?;
-        report.bytes_reclaimed = report
-            .bytes_reclaimed
-            .saturating_add(recover_retired_exec_for(
-                &maintenance_state.exec_store,
-                crate::core::wait::PROBE,
-            ));
-        Ok::<_, io::Error>(report)
+    let (result, _maintenance_guard) = launch_maintenance_blocking(runtime_handle, move || {
+        let result = (|| {
+            let dep_graph = maintenance_state.dep_graph.load_full();
+            let mut report = maintain_disk_artifacts_with_barrier(
+                MaintenancePass {
+                    artifact_dir: maintenance_state.artifact_dir.as_path(),
+                    artifacts: &maintenance_state.artifacts,
+                    artifact_store: &maintenance_state.artifact_store,
+                    index_writer_tx: Some(&maintenance_index_writer_tx),
+                    dep_graph: &dep_graph,
+                    pending_write_bytes,
+                    policy,
+                    kind,
+                    environment: &RealMaintenanceEnvironment,
+                    retired_top_level: versioned_top_level(maintenance_state.cache_dir.as_path()),
+                },
+                Some(&maintenance_state.artifact_publication),
+                Some(&maintenance_state.shutdown_requested),
+            )?;
+            report.bytes_reclaimed =
+                report
+                    .bytes_reclaimed
+                    .saturating_add(recover_retired_exec_for(
+                        &maintenance_state.exec_store,
+                        crate::core::wait::PROBE,
+                    ));
+            Ok::<_, io::Error>(report)
+        })();
+        // The worker retains ownership if its caller is cancelled. On a
+        // normal return, keep the permit through WAL acknowledgement too.
+        (result, maintenance_guard)
     })
     .await
-    .map_err(io::Error::other)??;
+    .map_err(io::Error::other)?;
+    let report = result?;
 
     if report.artifacts_removed > 0
         && !flush_index_writer(&index_writer_tx, Duration::from_secs(30)).await
