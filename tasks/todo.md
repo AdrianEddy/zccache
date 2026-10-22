@@ -2105,3 +2105,58 @@ Remaining enforcement work before #1964 can ship:
 - Native private-plan deferral is already separately GREEN in the 98-test bosn
   regression receipt above. OS/features/planted cases, docs, clippy, one review,
   clean committed full gate, PR merge/main rebase/cleanup remain required.
+
+### #1964 runtime coroutine lifetime analysis checkpoint (2026-10-22)
+
+- Focused RED: an async reader released before dropping a borrowed opaque value
+  was rejected solely because promoted MIR was consumed
+  (/tmp/zccache-1964-async-snapshot-red.log). Snapshotting at check_crate, including
+  reverse body order, proved too late: the async body was already consumed.
+  Removed that failed experiment and temporary trace output.
+- New runtime_mir works exclusively on a cloned compiler body. It restores
+  analysis hints, validates aliases of the real self pointer (all assignments,
+  pointer-storage borrows and call results), and models owned frame storage.
+  Unknown/ambiguous frame aliases deny compilation; rustc's body is never changed.
+- Saved fields use rustc's stable CoroutineSavedLocal identities across variants.
+  The lifetime CFG starts unresumed and connects each suspension only to its
+  matching continuation. Prefix captures remain owned until actually moved or
+  dropped. The first variant-based approach missed a captured reader after yield
+  (yield-frame-red.log); that approach was replaced, not exempted.
+- Exact guarded move paths are registered via fake reads in an unreachable
+  analysis-only block. This avoids collapsing untracked sibling fields into one
+  parent. Reader/drain permits remain allowed through async operations; short
+  publication/store/data guards are denied when live at Yield/Pending suspension.
+- Mutable borrowed captures and nested reference wrappers remain caller-held
+  even after drop(reference). Valid RED is async-mut-borrow-red.log (no diagnostic
+  before borrowed-capture tracking). async_held_drop diagnoses before release;
+  async_released accepts opaque drops after release, including a second await.
+  Coroutine fixtures likewise check held and released readers across yields.
+- mutated_guard_storage was already denied by the analysis; its initial log is
+  an expected-stderr mismatch, not evidence of a new policy bypass. Retained it
+  as negative coverage without adding an unsupported mutation rule.
+- All 35 compiler fixtures pass
+  (/tmp/zccache-1964-runtime-resume-verified.log). New generator fixture uses only
+  the pinned nightly compiler harness; no product Rust feature was changed.
+- Production probe remains RED with 34 diagnostics
+  (/tmp/zccache-1964-resume-lifetime-workspace.log). They are now concrete slow/
+  opaque-drop and ownership-transfer sites rather than the old consumed-MIR
+  blanket diagnostic. No native alias-preparation ICE or permissive fallback.
+- Inspection MIR preserved at /tmp/zccache-soldr-policy-audit/async-released-runtime.mir;
+  removed the one-off emitted .mir from the build directory with safe-rm.
+
+Still required before #1964 can land:
+- Validate generated coroutine cancellation/drop glue, not just Poll/resume
+  execution; current runtime_mir does not traverse coroutine_drop. Check opaque
+  captured destructors and ownership ordering during unpolled/pending cancellation.
+- Resolve typed ownership transfer into checked local callees/owned blocking
+  tasks while retaining checks for caller-held sibling guards. Do not exempt
+  arbitrary moved values or unchecked generic helpers.
+- Add direct/transitive async sweep lane enforcement with recognized owned
+  handoffs. Preserve liveness checks across handoffs rather than treating a
+  blocking-task factory as a blanket no-effects boundary.
+- Check generic guard erasure/leak helpers and mutable guard storage using
+  planted violations before relaxing any call-boundary rule. Existing explicit
+  mem::forget/Box erasure cases do not prove generic escape completeness.
+- Production green, supported OS/features and planted violations, final docs,
+  clippy, one clud-review, clean committed full gate, PR merge/main rebase and
+  branch cleanup remain outstanding. Then continue #1965–1971 sequentially.

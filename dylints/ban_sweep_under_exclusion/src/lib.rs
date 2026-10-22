@@ -2,6 +2,7 @@
 extern crate rustc_abi;
 extern crate rustc_errors;
 extern crate rustc_hir;
+extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 
@@ -13,6 +14,7 @@ mod guard_analysis;
 mod guard_escapes;
 mod guard_initialization;
 mod guard_types;
+mod runtime_mir;
 extern crate rustc_span;
 
 dylint_linting::declare_late_lint! {

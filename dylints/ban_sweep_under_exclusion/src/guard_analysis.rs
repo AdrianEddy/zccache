@@ -7,54 +7,22 @@ use rustc_middle::{mir, ty};
 pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
     use rustc_mir_dataflow::{move_paths::MoveData, Analysis};
     let (stored, _) = cx.tcx.mir_promoted(owner);
-    if stored.is_stolen() {
-        let later = cx.tcx.optimized_mir(owner);
-        // With consumed MIR, conservatively reject relevant effects anywhere
-        // in the body rather than guessing where an optimized guard dropped.
-        let effects =
-            later
-                .basic_blocks
-                .iter()
-                .fold(0, |effects, block| match &block.terminator().kind {
-                    mir::TerminatorKind::Call { func, .. } => {
-                        effects
-                            | super::effects::call(
-                                cx,
-                                func.ty(&later.local_decls, cx.tcx),
-                                &mut Vec::new(),
-                            )
-                    }
-                    mir::TerminatorKind::Drop { place, .. } => {
-                        effects
-                            | super::effects::drop_value(
-                                cx,
-                                place.ty(&later.local_decls, cx.tcx).ty,
-                                &mut Vec::new(),
-                                &mut Vec::new(),
-                            )
-                    }
-                    _ => effects,
-                });
-        let scope = if effects & (super::effects::SWEEP | super::effects::UNKNOWN) != 0 {
-            Scope::Any
-        } else {
-            Scope::Critical
-        };
-        if effects != 0
-            && later
-                .local_decls
-                .iter()
-                .any(|local| contains_guard(cx, local.ty, scope, &mut Vec::new()))
-        {
-            super::emit(
-                cx,
-                later.span,
-                "cannot validate guard lifetime after compiler MIR was consumed",
-            );
+    let (mut owned, frame, aliases, suspensions) = if stored.is_stolen() {
+        match super::runtime_mir::prepare(cx, cx.tcx.optimized_mir(owner).clone()) {
+            Ok(prepared) => (
+                prepared.body,
+                prepared.frame,
+                prepared.aliases,
+                prepared.suspensions,
+            ),
+            Err(message) => {
+                super::emit(cx, cx.tcx.def_span(owner), message);
+                return;
+            }
         }
-        return;
-    }
-    let mut owned = (*stored.borrow()).clone();
+    } else {
+        ((*stored.borrow()).clone(), None, Vec::new(), Vec::new())
+    };
     // Borrow checking has imaginary edges that bypass real moves/drops.
     // Analyze execution paths, preserving the original MIR for the compiler.
     for block in owned.basic_blocks.as_mut() {
@@ -69,26 +37,65 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             };
         }
     }
+    let mut leaf_sets = Vec::new();
+    for scope in [Scope::Critical, Scope::Any] {
+        let mut leaves = Vec::new();
+        for (local, declaration) in owned.local_decls.iter_enumerated() {
+            if !aliases.contains(&local) {
+                guard_leaves(
+                    cx,
+                    declaration.ty,
+                    mir::Place::from(local),
+                    scope,
+                    &mut leaves,
+                );
+            }
+        }
+        let mut collector = GuardPlaces {
+            cx,
+            body: &owned,
+            scope,
+            aliases: &aliases,
+            leaves: &mut leaves,
+        };
+        rustc_middle::mir::visit::Visitor::visit_body(&mut collector, &owned);
+        leaf_sets.push(leaves);
+    }
+    // Fake reads register exact move paths without any initialization/move
+    // effects. Their block has no predecessors and never executes.
+    let mut declarations = mir::BasicBlockData::new(
+        Some(mir::Terminator {
+            source_info: mir::SourceInfo::outermost(owned.span),
+            kind: mir::TerminatorKind::Unreachable,
+        }),
+        false,
+    );
+    for place in leaf_sets.iter().flatten() {
+        declarations.statements.push(mir::Statement::new(
+            mir::SourceInfo::outermost(owned.span),
+            mir::StatementKind::FakeRead(Box::new((mir::FakeReadCause::ForMatchGuard, *place))),
+        ));
+    }
+    owned.basic_blocks.as_mut().push(declarations);
     let body = &owned;
     let data = MoveData::gather_moves(body, cx.tcx, |_| true);
     let mut sets = Vec::new();
     let mut borrowed = Vec::new();
-    for scope in [Scope::Critical, Scope::Any] {
+    for (scope, leaves) in [Scope::Critical, Scope::Any].into_iter().zip(leaf_sets) {
         // Dropping/moving a reference never releases its caller-owned guard.
-        borrowed.push(body.args_iter().any(|local| {
-            let value = body.local_decls[local].ty;
-            matches!(value.kind(), ty::Ref(..)) && contains_guard(cx, value, scope, &mut Vec::new())
-        }));
-        let mut leaves = Vec::new();
-        for (local, declaration) in body.local_decls.iter_enumerated() {
-            guard_leaves(
-                cx,
-                declaration.ty,
-                mir::Place::from(local),
-                scope,
-                &mut leaves,
-            );
-        }
+        borrowed.push(
+            body.args_iter().any(|local| {
+                !aliases.contains(&local)
+                    && super::guard_types::borrowed(
+                        cx,
+                        body.local_decls[local].ty,
+                        scope,
+                        &mut Vec::new(),
+                    )
+            }) || frame.is_some_and(|local| {
+                super::guard_types::borrowed(cx, body.local_decls[local].ty, scope, &mut Vec::new())
+            }),
+        );
         let mut guards = Vec::new();
         for leaf in leaves {
             let index = match data.rev_lookup.find(leaf.as_ref()) {
@@ -106,6 +113,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
         return;
     }
     let mut cursor = super::guard_initialization::GuardInitialization::new(cx.tcx, body, &data)
+        .with_frame(frame)
         .iterate_to_fixpoint(cx.tcx, body, None)
         .into_results_cursor(body);
     for (block, value) in body.basic_blocks.iter_enumerated() {
@@ -115,6 +123,17 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             statement_index: value.statements.len(),
         });
         if !borrowed[1] && !sets[1].iter().any(|guard| cursor.get().contains(*guard)) {
+            continue;
+        }
+        if (suspensions.contains(&block)
+            || matches!(terminator.kind, mir::TerminatorKind::Yield { .. }))
+            && (borrowed[0] || sets[0].iter().any(|guard| cursor.get().contains(*guard)))
+        {
+            super::emit(
+                cx,
+                terminator.source_info.span,
+                "short publication or store exclusion must not cross suspension",
+            );
             continue;
         }
         // Pre-elaboration MIR retains drops of already moved values. They
@@ -195,7 +214,13 @@ fn guard_leaves<'tcx>(
     if !contains_guard(cx, value, scope, &mut Vec::new()) {
         return;
     }
-    if let ty::Tuple(fields) = value.kind() {
+    let fields = match value.kind() {
+        ty::Tuple(fields) => Some(*fields),
+        ty::Closure(_, args) => Some(args.as_closure().upvar_tys()),
+        ty::Coroutine(_, args) => Some(args.as_coroutine().upvar_tys()),
+        _ => None,
+    };
+    if let Some(fields) = fields {
         for (index, field) in fields.iter().enumerate() {
             guard_leaves(
                 cx,
@@ -241,4 +266,31 @@ fn guard_leaves<'tcx>(
         }
     }
     leaves.push(place);
+}
+
+struct GuardPlaces<'a, 'tcx> {
+    cx: &'a LateContext<'tcx>,
+    body: &'a mir::Body<'tcx>,
+    scope: Scope,
+    aliases: &'a [mir::Local],
+    leaves: &'a mut Vec<mir::Place<'tcx>>,
+}
+impl<'tcx> mir::visit::Visitor<'tcx> for GuardPlaces<'_, 'tcx> {
+    fn visit_place(
+        &mut self,
+        place: &mir::Place<'tcx>,
+        context: mir::visit::PlaceContext,
+        location: mir::Location,
+    ) {
+        if !self.aliases.contains(&place.local) {
+            guard_leaves(
+                self.cx,
+                place.ty(&self.body.local_decls, self.cx.tcx).ty,
+                *place,
+                self.scope,
+                self.leaves,
+            );
+        }
+        self.super_place(place, context, location);
+    }
 }

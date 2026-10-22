@@ -109,3 +109,53 @@ pub(super) fn contains<'tcx>(
         _ => false,
     }
 }
+
+/// A borrowed exclusion remains held by its caller even after its reference
+/// wrapper is dropped. Sealed guard internals are owned releases, not borrows.
+pub(super) fn borrowed<'tcx>(
+    cx: &LateContext<'tcx>,
+    value: ty::Ty<'tcx>,
+    scope: Scope,
+    seen: &mut Vec<ty::Ty<'tcx>>,
+) -> bool {
+    if seen.contains(&value) {
+        return false;
+    }
+    seen.push(value);
+    match value.kind() {
+        ty::Ref(_, value, _) => contains(cx, *value, scope, &mut Vec::new()),
+        ty::Tuple(values) => values.iter().any(|value| borrowed(cx, value, scope, seen)),
+        ty::Array(value, _) | ty::Slice(value) => borrowed(cx, *value, scope, seen),
+        ty::Closure(_, args) => args
+            .as_closure()
+            .upvar_tys()
+            .iter()
+            .any(|value| borrowed(cx, value, scope, seen)),
+        ty::Coroutine(_, args) => args
+            .as_coroutine()
+            .upvar_tys()
+            .iter()
+            .any(|value| borrowed(cx, value, scope, seen)),
+        ty::Adt(definition, args) => {
+            if direct(cx, definition.did()).is_some() {
+                return false;
+            }
+            let name = cx.tcx.item_name(definition.did());
+            if matches!(
+                cx.tcx.crate_name(definition.did().krate).as_str(),
+                "core" | "std" | "alloc"
+            ) && matches!(name.as_str(), "Weak" | "PhantomData" | "NonNull")
+            {
+                return false;
+            }
+            if definition.did().is_local() {
+                definition
+                    .all_fields()
+                    .any(|field| borrowed(cx, field.ty(cx.tcx, args).skip_norm_wip(), scope, seen))
+            } else {
+                args.types().any(|value| borrowed(cx, value, scope, seen))
+            }
+        }
+        _ => false,
+    }
+}

@@ -12,6 +12,7 @@ pub(super) struct GuardInitialization<'a, 'tcx> {
     body: &'a mir::Body<'tcx>,
     data: &'a MoveData<'tcx>,
     tcx: ty::TyCtxt<'tcx>,
+    frame: Option<mir::Local>,
 }
 impl<'a, 'tcx> GuardInitialization<'a, 'tcx> {
     pub(super) fn new(
@@ -24,7 +25,12 @@ impl<'a, 'tcx> GuardInitialization<'a, 'tcx> {
             body,
             data,
             tcx,
+            frame: None,
         }
+    }
+    pub(super) fn with_frame(mut self, frame: Option<mir::Local>) -> Self {
+        self.frame = frame;
+        self
     }
 }
 impl<'a, 'tcx> Analysis<'tcx> for GuardInitialization<'a, 'tcx> {
@@ -36,6 +42,13 @@ impl<'a, 'tcx> Analysis<'tcx> for GuardInitialization<'a, 'tcx> {
     }
     fn initialize_start_block(&self, body: &mir::Body<'tcx>, state: &mut Self::Domain) {
         self.inner.initialize_start_block(body, state);
+        if let Some(frame) = self.frame {
+            for (index, path) in self.data.move_paths.iter_enumerated() {
+                if path.place.local == frame {
+                    state.gen_(index);
+                }
+            }
+        }
     }
     fn apply_primary_statement_effect(
         &self,
