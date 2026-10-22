@@ -136,6 +136,26 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
             );
             continue;
         }
+        // A whole closure drop releases captures in field order. Its own
+        // first guard must not be counted through later capture destruction.
+        // Any borrowed or separately held guard still prevents this proof.
+        if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {
+            let value = place.ty(&body.local_decls, cx.tcx).ty;
+            let all_inside = !borrowed[1]
+                && sets[1].iter().all(|guard| {
+                    let held = data.move_paths[*guard].place;
+                    !cursor.get().contains(*guard)
+                        || (held.local == place.local
+                            && held.projection.starts_with(place.projection))
+                });
+            if all_inside
+                && [Scope::Critical, Scope::Any]
+                    .into_iter()
+                    .all(|scope| super::blocking_transfer::cancellation_safe(cx, value, scope))
+            {
+                continue;
+            }
+        }
         // Pre-elaboration MIR retains drops of already moved values. They
         // cannot execute a destructor and must not manufacture cleanup work.
         if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {

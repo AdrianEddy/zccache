@@ -41,12 +41,27 @@ pub(super) fn moves<'tcx>(
     {
         return Vec::new();
     }
+    if !super::guard_types::contains(cx, value, scope, &mut Vec::new())
+        || !cancellation_safe(cx, value, scope)
+    {
+        return Vec::new();
+    }
+    vec![place]
+}
+
+/// Capture fields have compiler-defined drop order, including unwind before
+/// the body has moved them into locals. This never treats custom Drop as safe.
+pub(super) fn cancellation_safe<'tcx>(
+    cx: &LateContext<'tcx>,
+    value: ty::Ty<'tcx>,
+    scope: Scope,
+) -> bool {
+    let ty::Closure(_, arguments) = *value.kind() else {
+        return false;
+    };
     let fields = arguments.as_closure().upvar_tys();
     let owns = |field| super::guard_types::contains(cx, field, scope, &mut Vec::new());
     let mut held = fields.iter().filter(|field| owns(*field)).count();
-    if held == 0 {
-        return Vec::new();
-    }
     for field in fields {
         if held != 0 {
             let effects = super::effects::drop_value(cx, field, &mut Vec::new(), &mut Vec::new());
@@ -59,17 +74,17 @@ pub(super) fn moves<'tcx>(
                     0
                 };
             if effects & forbidden != 0 {
-                return Vec::new();
+                return false;
             }
         }
         if owns(field) {
             if !releases(cx, field, scope) {
-                return Vec::new();
+                return false;
             }
             held -= 1;
         }
     }
-    vec![place]
+    true
 }
 
 fn releases<'tcx>(cx: &LateContext<'tcx>, value: ty::Ty<'tcx>, scope: Scope) -> bool {
