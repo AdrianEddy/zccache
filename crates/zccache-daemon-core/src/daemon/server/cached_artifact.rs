@@ -920,7 +920,7 @@ mod tests {
                 include_str!("handle_compile_multi_lookup.rs"),
             ),
             ("exact exec", include_str!("handle_exec.rs")),
-            ("link and directory bundle", include_str!("handle_link.rs")),
+            ("link and directory bundle", include_str!("handle_link_hit.rs")),
         ];
         for (name, source) in consumers {
             assert!(
@@ -929,7 +929,7 @@ mod tests {
             );
         }
         assert!(
-            include_str!("handle_link.rs")
+            include_str!("handle_link_hit.rs")
                 .contains("materialize_directory_payload(&payloads[0], &output_path)"),
             "directory-bundle unpacking must consume payloads from the leased resolver"
         );
