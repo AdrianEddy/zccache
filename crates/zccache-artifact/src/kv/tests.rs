@@ -405,8 +405,14 @@ fn concurrent_stores_over_one_dir_do_not_lock_each_other() {
 fn put_racing_clear_namespace_never_errors() {
     let (_d, s) = store();
     let stop = std::sync::atomic::AtomicBool::new(false);
-    // Errors are collected, not unwrapped in the loops: a panicking clearer
-    // would never raise `stop` and the scope would wait on the writers forever.
+    // Raise `stop` on every exit path: a panicking clearer must fail the test
+    // with its message, not leave the scope waiting on the writers forever.
+    struct StopOnDrop<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for StopOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
     let (put_errors, clear_errors) = std::thread::scope(|scope| {
         let writers: Vec<_> = (0..4)
             .map(|w| {
@@ -426,10 +432,11 @@ fn put_racing_clear_namespace_never_errors() {
                 })
             })
             .collect();
+        let stop_writers = StopOnDrop(&stop);
         let clear_errors: Vec<String> = (0..100)
             .filter_map(|_| s.clear_namespace("ns").err().map(|e| e.to_string()))
             .collect();
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(stop_writers);
         let put_errors: Vec<String> = writers
             .into_iter()
             .flat_map(|writer| writer.join().unwrap())
