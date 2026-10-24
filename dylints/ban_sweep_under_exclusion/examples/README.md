@@ -13,3 +13,8 @@ partial move, which must keep the real unwind and cleanup violation visible.
 `root_lease_ownership` rejects resolved and generic leaks, erasure, suppression
 and raw overwrite of a real core root lease. `root_lease_work` permits bounded
 cleanup, operation lifetimes and non-owning markers with that capability.
+
+`dyn_drop` resolves trait-object drops to the values this crate unsized into
+them: a sweeping `dyn Hook` or `dyn Fn()` is rejected, while an unrelated trait
+or a different `Fn` signature stays clean. A generic boxing helper is
+instantiated through its local caller.

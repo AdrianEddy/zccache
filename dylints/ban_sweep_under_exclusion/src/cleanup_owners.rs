@@ -13,6 +13,8 @@ pub(super) fn approved(cx: &LateContext<'_>, filename: &str) -> bool {
         ("zccache_daemon_core::daemon::server::persist::staged_store::trash::try_remove_empty_trash", "/persist/staged_store/trash.rs"),
         ("zccache_daemon_core::daemon::server::persist::staged_store::root_safety::remove_staged_link_or_reparse", "/persist/staged_store/root_safety.rs"),
         ("zccache_daemon_core::daemon::server::persist::directory_bundle::remove_directory_if_present", "/persist/directory_bundle.rs"),
+        ("zccache_daemon_core::daemon::server::staging_root::sweep_private_trash", "/server/staging_root.rs"),
+        ("zccache_daemon_core::daemon::server::staging_root::remove_staging_root", "/server/staging_root.rs"),
     ];
     if FREE
         .iter()

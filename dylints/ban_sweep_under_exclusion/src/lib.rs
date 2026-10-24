@@ -14,6 +14,7 @@ mod dead_drop_edges;
 mod detach_policy;
 mod drop_paths;
 mod drop_variants;
+mod dyn_sources;
 mod effects;
 mod guard_analysis;
 mod guard_escapes;
@@ -181,11 +182,23 @@ fn filename(cx: &LateContext<'_>, span: Span) -> String {
 }
 
 fn emit(cx: &LateContext<'_>, span: Span, message: &str) {
+    emit_explained(cx, span, message, Vec::new());
+}
+
+/// `ZCCACHE_DYLINT_EXPLAIN=1` attaches the effect and held-guard notes. They
+/// stay opt-in so the UI fixtures keep their stable primary diagnostics.
+fn emit_explained(cx: &LateContext<'_>, span: Span, message: &str, notes: Vec<String>) {
+    let explain = std::env::var_os("ZCCACHE_DYLINT_EXPLAIN").is_some_and(|value| value == "1");
     cx.opt_span_lint(
         BAN_SWEEP_UNDER_EXCLUSION,
         Some(span),
         DiagDecorator(|diag| {
             diag.primary_message(message.to_owned());
+            if explain {
+                for note in notes {
+                    diag.note(note);
+                }
+            }
         }),
     );
 }

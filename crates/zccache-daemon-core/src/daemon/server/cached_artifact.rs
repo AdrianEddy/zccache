@@ -920,7 +920,10 @@ mod tests {
                 include_str!("handle_compile_multi_lookup.rs"),
             ),
             ("exact exec", include_str!("handle_exec.rs")),
-            ("link and directory bundle", include_str!("handle_link_hit.rs")),
+            (
+                "link and directory bundle",
+                include_str!("handle_link_hit.rs"),
+            ),
         ];
         for (name, source) in consumers {
             assert!(

@@ -131,10 +131,6 @@ impl StagedDirectoryPlan {
             self.requested.as_path(),
         )
     }
-
-    pub(in crate::daemon::server) fn cleanup(&self) -> std::io::Result<()> {
-        remove_directory_if_present(&self.root)
-    }
 }
 
 fn create_private_directory(parent: &Path) -> std::io::Result<NormalizedPath> {
@@ -176,8 +172,10 @@ fn rewrite_dsymutil_args(args: &[String], staged: &Path) -> Vec<String> {
 }
 
 impl Drop for StagedDirectoryPlan {
+    // Retire by rename only: the owner may drop under publication or store
+    // exclusion, so the staging sweeper owns the recursive removal (#1964).
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        crate::daemon::server::detach_private_root(self.root.as_path());
     }
 }
 
@@ -185,29 +183,56 @@ pub(in crate::daemon::server) fn is_directory_output_name(name: &str) -> bool {
     name.starts_with(DIRECTORY_OUTPUT_PREFIX)
 }
 
+/// A failed directory unpack whose private temp tree may remain on disk.
+/// The caller may still hold the payload's reader lease, so the recursive
+/// removal waits for [`Self::cleanup`] after that lease is released (#1964).
+#[derive(Debug)]
+#[must_use = "remove the temp tree after releasing the payload lease"]
+pub(in crate::daemon::server) struct DirectoryUnpackFailure {
+    error: std::io::Error,
+    temp: Option<NormalizedPath>,
+}
+
+impl DirectoryUnpackFailure {
+    fn before_unpack(error: std::io::Error) -> Self {
+        Self { error, temp: None }
+    }
+
+    /// Remove the leftover temp tree and return the original error.
+    pub(in crate::daemon::server) fn cleanup(self) -> std::io::Error {
+        if let Some(temp) = self.temp {
+            if let Err(error) = remove_directory_if_present(&temp) {
+                tracing::debug!(%error, temp = %temp.display(), "directory unpack temp retained");
+            }
+        }
+        self.error
+    }
+}
+
 pub(in crate::daemon::server) fn materialize_directory_payload(
     payload: &CachedPayload,
     requested: &Path,
-) -> std::io::Result<u64> {
+) -> Result<u64, DirectoryUnpackFailure> {
     let bytes = match payload {
         CachedPayload::Bytes(bytes) => Arc::clone(bytes),
-        CachedPayload::File(path) => Arc::new(std::fs::read(path)?),
+        CachedPayload::File(path) => {
+            Arc::new(std::fs::read(path).map_err(DirectoryUnpackFailure::before_unpack)?)
+        }
     };
     let parent = requested.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(parent).map_err(DirectoryUnpackFailure::before_unpack)?;
     let temp = parent.join(format!(
         ".zccache-directory-{}-{}",
         std::process::id(),
         DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
-    let result = (|| {
-        unpack_directory(&bytes, &temp)?;
-        crate::platform::fs::replace::install_directory(&temp, requested)
-    })();
-    if result.is_err() {
-        let _ = remove_directory_if_present(&temp);
-    }
-    result.map(|()| bytes.len() as u64)
+    unpack_directory(&bytes, &temp)
+        .and_then(|()| crate::platform::fs::replace::install_directory(&temp, requested))
+        .map(|()| bytes.len() as u64)
+        .map_err(|error| DirectoryUnpackFailure {
+            error,
+            temp: Some(temp.into()),
+        })
 }
 
 fn pack_directory(source: &Path, archive: &Path) -> std::io::Result<u64> {
@@ -492,10 +517,41 @@ mod tests {
             &CachedPayload::Bytes(Arc::new(b"not a bundle".to_vec())),
             &requested,
         )
-        .unwrap_err();
+        .unwrap_err()
+        .cleanup();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(std::fs::read(requested.join("existing")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn failed_unpack_leaves_temp_tree_until_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let requested = temp.path().join("app.dSYM");
+        let leftovers = || {
+            std::fs::read_dir(temp.path())
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".zccache-directory-")
+                })
+                .count()
+        };
+
+        let failure = materialize_directory_payload(
+            &CachedPayload::Bytes(Arc::new(b"not a bundle".to_vec())),
+            &requested,
+        )
+        .unwrap_err();
+        let retained = leftovers();
+        failure.cleanup();
+
+        assert!(retained <= 1, "at most the one private temp tree");
+        assert_eq!(leftovers(), 0, "cleanup removes the temp tree");
     }
 
     #[test]

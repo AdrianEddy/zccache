@@ -52,6 +52,7 @@ fn function<'tcx>(
         .count()
         >= 128
     {
+        explain_trace(format_args!("call depth limit at {definition:?}"));
         return UNKNOWN;
     }
     let index = seen.len();
@@ -130,6 +131,7 @@ fn function<'tcx>(
         // Required trait methods have no MIR body. Their dynamic implementation
         // cannot be assumed free of cleanup, and querying MIR would ICE rustc.
         if cx.tcx.hir_maybe_body_owned_by(local).is_none() {
+            explain_trace(format_args!("bodiless callee {definition:?}"));
             return UNKNOWN;
         }
         // Release the query borrow before following callees: a query for a callee
@@ -293,6 +295,7 @@ pub(super) fn drop_value<'tcx>(
         return 0;
     }
     if active.len() >= 128 {
+        explain_trace(format_args!("drop depth limit at {value}"));
         return UNKNOWN;
     }
     active.push(value);
@@ -317,6 +320,9 @@ pub(super) fn drop_value<'tcx>(
                     .destructor(cx.tcx)
                     .filter(|drop| drop.did.is_local())
                     .map_or(0, |drop| function(cx, drop.did, arguments, summaries));
+                if own & (SWEEP | UNKNOWN) != 0 {
+                    explain_trace(format_args!("destructor {value} effects {own}"));
+                }
                 let fields =
                     if definition.did().is_local() || definition.destructor(cx.tcx).is_none() {
                         definition.all_fields().fold(0, |effects, field| {
@@ -391,9 +397,36 @@ pub(super) fn drop_value<'tcx>(
                 drop_value(cx, hidden, summaries, active)
             }
         }
-        ty::Dynamic(..) | ty::Param(..) | ty::Alias(..) => UNKNOWN,
+        ty::Dynamic(..) => super::dyn_sources::drop_effects(cx, value, summaries, active),
+        ty::Param(..) | ty::Alias(..) => {
+            explain_trace(format_args!(
+                "opaque drop {value} via {}",
+                active
+                    .iter()
+                    .map(|outer| outer.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" > ")
+            ));
+            UNKNOWN
+        }
         _ => 0,
     };
     active.pop();
     effects
+}
+
+/// `ZCCACHE_DYLINT_EXPLAIN_TRACE=<file>` appends which destructors carry
+/// sweep or unknown effects; cargo does not forward raw driver stderr.
+pub(super) fn explain_trace(line: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let Some(path) = std::env::var_os("ZCCACHE_DYLINT_EXPLAIN_TRACE") else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
 }

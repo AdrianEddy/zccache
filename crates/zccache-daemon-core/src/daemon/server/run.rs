@@ -276,7 +276,7 @@ impl DaemonServer {
                     // returned publication write guard stays held so no
                     // publisher can mutate the cache while the depgraph and
                     // metadata snapshots below are taken.
-                    let _publication_guard =
+                    let publication_guard =
                         drain_durable_state_for_shutdown(&self.state, index_writer_handle.take())
                             .await;
 
@@ -499,8 +499,19 @@ impl DaemonServer {
                         }
                     }
 
-                    // Clean up our own depfile temp directory.
-                    let _ = std::fs::remove_dir_all(&self.state.depfile_tmpdir);
+                    // The snapshots are taken; release publication before the
+                    // recursive depfile cleanup so no sweep runs under the
+                    // drain (#1964). The directory is private to this
+                    // daemon instance, so no publisher can reach it.
+                    drop(publication_guard);
+                    let depfile_tmpdir = self.state.depfile_tmpdir.clone();
+                    if let Err(error) = kernal_api::async_engine::launch_blocking(move || {
+                        let _ = std::fs::remove_dir_all(&depfile_tmpdir);
+                    })
+                    .await
+                    {
+                        tracing::debug!(%error, "depfile temp cleanup task failed");
+                    }
 
                     // #1162: everything durable is now on disk, so this daemon
                     // has stopped writing and the next one may claim the root.

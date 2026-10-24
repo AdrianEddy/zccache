@@ -149,20 +149,18 @@ impl ExecStagedPlan {
         self.outputs.len()
     }
 
+    /// Retire the private root; the staging sweeper removes it (#1964).
     fn cleanup(&self) -> std::io::Result<()> {
-        std::fs::remove_dir_all(&self.root).or_else(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        })
+        crate::daemon::server::detach_private_root(self.root.as_path());
+        Ok(())
     }
 }
 
 impl Drop for ExecStagedPlan {
+    // Retire by rename only: the owner may drop under publication or store
+    // exclusion, so the staging sweeper owns the recursive removal (#1964).
     fn drop(&mut self) {
-        let _ = self.cleanup();
+        crate::daemon::server::detach_private_root(self.root.as_path());
     }
 }
 

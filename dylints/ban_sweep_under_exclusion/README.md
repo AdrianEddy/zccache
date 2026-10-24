@@ -1,6 +1,6 @@
 # Sweep ownership and exclusion
 
-Work in progress for #1964; not yet ready for the final workspace gate.
+Introduced by #1964.
 
 The lint resolves raw tree deletion DefIds and confines them to explicit sweep,
 link-removal and private staging/lifecycle owners. Function-item capture is
@@ -60,8 +60,23 @@ Resolved `ptr::drop_in_place`, `ManuallyDrop::drop`, and
 `MaybeUninit::assume_init_drop` propagate the destroyed type's cleanup effects.
 They do not establish a moved-owner release proof for the caller's guards.
 
+Dropping a trait object runs the destructor of a value unsized into it. Its
+effects are the drop effects of this crate's unsizing coercions and casts to
+the same principal trait and generic arguments, so `dyn Fn(&TaskMeta)` and
+`dyn Fn()` resolve separately. A local closure or function item passed to a
+foreign generic function also counts for a matching `Fn`-family object, since
+foreign code (tokio runtime hooks, for example) may box it internally. A
+generic source is instantiated through the local uses of its function, up to
+eight generic callers; an exported generic function stays unknown. Other local
+types unsized only inside foreign generic code are not tracked.
+
+`ZCCACHE_DYLINT_EXPLAIN=1` adds notes naming each finding's effects, callee or
+dropped value, and held guards. `ZCCACHE_DYLINT_EXPLAIN_TRACE=<file>` appends
+the destructors, opaque drops and depth limits that produced unknown effects;
+cargo does not forward raw driver output. Both are diagnostics only.
+
 The core publication facade distinguishes blocking commit permits from complete
-admission operations and async checkpoint/shutdown drains. The workspace gate
-still fails on owned task transfers and opaque drop effects. Cancellation glue
-with retained guards, blocking-lane enforcement, the remaining ownership audit,
-and final OS/feature checks remain unfinished.
+admission operations and async checkpoint/shutdown drains. The production
+workspace gate passes. Cancellation glue with retained guards, blocking-lane
+enforcement, the remaining ownership audit, and final OS/feature checks remain
+unfinished.

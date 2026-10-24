@@ -231,7 +231,51 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
                     })
             })
         {
-            super::emit(
+            let mut notes = vec![format!(
+                "effects: {}{}{}{}",
+                if effects & super::effects::BULK != 0 {
+                    "bulk "
+                } else {
+                    ""
+                },
+                if effects & super::effects::SWEEP != 0 {
+                    "sweep "
+                } else {
+                    ""
+                },
+                if effects & super::effects::UNKNOWN != 0 {
+                    "unknown "
+                } else {
+                    ""
+                },
+                if effects & super::effects::ESCAPE != 0 {
+                    "escape"
+                } else {
+                    ""
+                },
+            )];
+            if let mir::TerminatorKind::Call { func, .. } = &terminator.kind {
+                notes.push(format!("callee: {}", func.ty(&body.local_decls, cx.tcx)));
+            }
+            if let mir::TerminatorKind::Drop { place, .. } = &terminator.kind {
+                notes.push(format!(
+                    "dropped: {place:?}: {}",
+                    place.ty(&body.local_decls, cx.tcx).ty
+                ));
+            }
+            if borrowed[index] {
+                notes.push("held: borrowed guard argument or frame".to_owned());
+            }
+            for guard in &sets[index] {
+                if cursor.get().contains(*guard) {
+                    let held = data.move_paths[*guard].place;
+                    notes.push(format!(
+                        "held: {held:?}: {}",
+                        held.ty(&body.local_decls, cx.tcx).ty
+                    ));
+                }
+            }
+            super::emit_explained(
                 cx,
                 terminator.source_info.span,
                 if effects & super::effects::ESCAPE != 0 {
@@ -239,6 +283,7 @@ pub(super) fn check(cx: &LateContext<'_>, owner: LocalDefId) {
                 } else {
                     "slow filesystem work retains publication or store exclusion"
                 },
+                notes,
             );
         }
     }
