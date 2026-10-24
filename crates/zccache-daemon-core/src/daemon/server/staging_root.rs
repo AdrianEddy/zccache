@@ -53,7 +53,30 @@ pub(super) struct StagingRoot {
 /// alone stops it without removing anything. Nobody waits for that removal:
 /// a root left by process exit is reclaimed by the abandoned-root cleanup.
 struct PrivateTrashSweeper {
-    stop: std::sync::mpsc::Sender<()>,
+    messages: std::sync::mpsc::Sender<SweeperMessage>,
+}
+
+enum SweeperMessage {
+    /// Remove a private root that lives outside this staging root.
+    Retire(NormalizedPath),
+    /// The staging root is dropped: remove it and exit.
+    Stop,
+}
+
+/// Hands a private root outside the staging root, such as a directory
+/// bundle beside its requested output, to the staging sweeper. Sending never
+/// touches the filesystem, so owners may retire roots under exclusion.
+#[derive(Clone)]
+pub(super) struct PrivateRootRetirer(std::sync::mpsc::Sender<SweeperMessage>);
+
+impl PrivateRootRetirer {
+    pub(super) fn retire(&self, root: &Path) {
+        #[cfg(test)]
+        super::persist::StagedHookGuard::pause_private_plan_cleanup(root);
+        if self.0.send(SweeperMessage::Retire(root.into())).is_err() {
+            tracing::debug!(root = %root.display(), "staging sweeper stopped; private root retained");
+        }
+    }
 }
 
 impl StagingRoot {
@@ -98,6 +121,12 @@ impl StagingRoot {
 
     pub(super) fn path(&self) -> &Path {
         self.path.as_path()
+    }
+
+    pub(super) fn retirer(&self) -> Option<PrivateRootRetirer> {
+        self.sweeper
+            .as_ref()
+            .map(|sweeper| PrivateRootRetirer(sweeper.messages.clone()))
     }
 
     pub(super) fn cleanup_abandoned(&self) -> std::io::Result<usize> {
@@ -209,7 +238,8 @@ fn staging_tree_is_quiet_for(root: &Path, quiet: std::time::Duration) -> bool {
 /// Retire a private plan root with one same-filesystem rename into the
 /// staging root's `.trash`. Owners call this from `Drop`, possibly while a
 /// caller holds publication or store exclusion, so it never walks the tree.
-/// A failed rename leaves the root for the abandoned-root sweep.
+/// A failed rename (an open handle on Windows, for example) leaves the root
+/// in place until the whole staging root is removed.
 pub(super) fn detach_private_root(root: &Path) {
     #[cfg(test)]
     super::persist::StagedHookGuard::pause_private_plan_cleanup(root);
@@ -235,22 +265,29 @@ pub(super) fn detach_private_root(root: &Path) {
 }
 
 fn spawn_private_trash_sweeper(root: NormalizedPath) -> std::io::Result<PrivateTrashSweeper> {
-    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let (messages, received) = std::sync::mpsc::channel::<SweeperMessage>();
     std::thread::Builder::new()
         .name("zccache-staging-sweeper".to_owned())
-        .spawn(move || loop {
-            match crate::core::wait::recv_for(&stopped, PRIVATE_TRASH_SWEEP_INTERVAL) {
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+        .spawn(move || {
+            let mut swept = std::time::Instant::now();
+            loop {
+                match crate::core::wait::recv_for(&received, PRIVATE_TRASH_SWEEP_INTERVAL) {
+                    Ok(SweeperMessage::Retire(retired)) => remove_retired_root(retired.as_path()),
+                    Ok(SweeperMessage::Stop) => {
+                        remove_retired_root(root.as_path());
+                        return;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+                // Steady retire traffic must not starve the trash sweep.
+                if swept.elapsed() >= PRIVATE_TRASH_SWEEP_INTERVAL {
                     sweep_private_trash(root.as_path());
+                    swept = std::time::Instant::now();
                 }
-                Ok(()) => {
-                    remove_staging_root(root.as_path());
-                    return;
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
         })?;
-    Ok(PrivateTrashSweeper { stop })
+    Ok(PrivateTrashSweeper { messages })
 }
 
 /// Reclaim retired private plan roots. Runs only on the sweeper thread.
@@ -265,8 +302,12 @@ fn sweep_private_trash(root: &Path) {
     }
 }
 
-fn remove_staging_root(root: &Path) {
-    let _ = std::fs::remove_dir_all(root);
+fn remove_retired_root(root: &Path) {
+    if let Err(error) = std::fs::remove_dir_all(root) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::debug!(%error, root = %root.display(), "retired private root retained");
+        }
+    }
 }
 
 impl Drop for StagingRoot {
@@ -275,7 +316,7 @@ impl Drop for StagingRoot {
             drop(lock);
         }
         if let Some(sweeper) = self.sweeper.take() {
-            if sweeper.stop.send(()).is_err() {
+            if sweeper.messages.send(SweeperMessage::Stop).is_err() {
                 tracing::debug!(root = %self.path.display(), "staging sweeper already stopped");
             }
         }

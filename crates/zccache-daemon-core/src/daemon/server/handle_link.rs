@@ -209,7 +209,7 @@ pub(super) async fn handle_link_ephemeral(
                 || hash_link_inputs(state, tool_path, &inputs, profile_enabled),
                 || {
                     prepare_link_miss(LinkMissPreparationRequest {
-                        staging_dir: state.staging.path(),
+                        staging: &state.staging,
                         args,
                         output_path: &output_path,
                         secondary_outputs: &parsed_tool.secondary_outputs,
@@ -389,9 +389,7 @@ pub(super) async fn handle_link_ephemeral(
         prepared_directory_plan_result
     } else {
         (parsed_tool.output_kind == crate::compiler::parse_linker::LinkOutputKind::DirectoryBundle)
-            .then(|| {
-                StagedDirectoryPlan::dsymutil(state.staging.path(), args, &output_path, cwd_path)
-            })
+            .then(|| StagedDirectoryPlan::dsymutil(&state.staging, args, &output_path, cwd_path))
     };
     let staged_plan_result = if prepared_during_hash {
         prepared_staged_plan_result

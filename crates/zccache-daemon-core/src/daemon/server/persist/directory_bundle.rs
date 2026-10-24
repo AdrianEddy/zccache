@@ -42,6 +42,9 @@ pub(in crate::daemon::server) struct StagedDirectoryPlan {
     staged: NormalizedPath,
     archive: NormalizedPath,
     root: NormalizedPath,
+    /// The root sits beside the requested output, outside the staging
+    /// root's trash, so the staging sweeper removes it (#1964).
+    retirer: Option<crate::daemon::server::PrivateRootRetirer>,
 }
 
 impl StagedDirectoryPlan {
@@ -59,11 +62,12 @@ impl StagedDirectoryPlan {
             staged,
             archive,
             root,
+            retirer: None,
         }
     }
 
     pub(in crate::daemon::server) fn dsymutil(
-        _staging_dir: &Path,
+        staging: &crate::daemon::server::StagingRoot,
         args: &[String],
         requested: &Path,
         cwd: &Path,
@@ -104,6 +108,7 @@ impl StagedDirectoryPlan {
             staged,
             archive,
             root,
+            retirer: staging.retirer(),
         })
     }
 
@@ -172,10 +177,13 @@ fn rewrite_dsymutil_args(args: &[String], staged: &Path) -> Vec<String> {
 }
 
 impl Drop for StagedDirectoryPlan {
-    // Retire by rename only: the owner may drop under publication or store
-    // exclusion, so the staging sweeper owns the recursive removal (#1964).
+    // The owner may drop under publication or store exclusion, so the
+    // staging sweeper owns the recursive removal (#1964).
     fn drop(&mut self) {
-        crate::daemon::server::detach_private_root(self.root.as_path());
+        match &self.retirer {
+            Some(retirer) => retirer.retire(self.root.as_path()),
+            None => crate::daemon::server::detach_private_root(self.root.as_path()),
+        }
     }
 }
 
@@ -590,5 +598,32 @@ mod tests {
 
         let error = pack_directory(&source, &temp.path().join("bundle.bin")).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // The bundle root lives beside the requested output, so it must reach
+    // the staging sweeper rather than a `.trash` nobody sweeps (#1964).
+    #[test]
+    fn dropped_plan_beside_its_output_is_removed_by_the_staging_sweeper() {
+        let cache = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let staging = crate::daemon::server::StagingRoot::new(cache.path(), None, 9).unwrap();
+        let root = create_private_directory(output.path()).unwrap();
+        std::fs::write(root.join("directory.bundle"), b"bundle").unwrap();
+        let requested: NormalizedPath = output.path().join("app.dSYM").into();
+        let mut plan =
+            StagedDirectoryPlan::for_test(root.clone(), requested, root.join("app.dSYM"));
+        plan.retirer = staging.retirer();
+
+        drop(plan);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while root.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !root.exists(),
+            "the staging sweeper removes the retired root"
+        );
+        assert!(!output.path().join(".trash").exists());
     }
 }
