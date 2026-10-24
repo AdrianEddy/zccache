@@ -904,8 +904,6 @@ impl StagedCompilePlan {
     }
 
     pub(in crate::daemon::server) fn cleanup(&self) -> io::Result<()> {
-        #[cfg(test)]
-        super::staged_store::StagedHookGuard::pause_private_plan_cleanup(&self.root);
         crate::daemon::server::detach_private_root(self.root.as_path());
         Ok(())
     }

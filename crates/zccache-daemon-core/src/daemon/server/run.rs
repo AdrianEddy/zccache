@@ -499,19 +499,14 @@ impl DaemonServer {
                         }
                     }
 
-                    // The snapshots are taken; release publication before the
-                    // recursive depfile cleanup so no sweep runs under the
-                    // drain (#1964). The directory is private to this
-                    // daemon instance, so no publisher can reach it.
+                    // Snapshots are done: release publication before sweeping
+                    // this instance's private depfile directory (#1964).
                     drop(publication_guard);
                     let depfile_tmpdir = self.state.depfile_tmpdir.clone();
-                    if let Err(error) = kernal_api::async_engine::launch_blocking(move || {
-                        let _ = std::fs::remove_dir_all(&depfile_tmpdir);
+                    let _ = kernal_api::async_engine::launch_blocking(move || {
+                        std::fs::remove_dir_all(&depfile_tmpdir)
                     })
-                    .await
-                    {
-                        tracing::debug!(%error, "depfile temp cleanup task failed");
-                    }
+                    .await;
 
                     // #1162: everything durable is now on disk, so this daemon
                     // has stopped writing and the next one may claim the root.

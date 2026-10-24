@@ -211,6 +211,8 @@ fn staging_tree_is_quiet_for(root: &Path, quiet: std::time::Duration) -> bool {
 /// caller holds publication or store exclusion, so it never walks the tree.
 /// A failed rename leaves the root for the abandoned-root sweep.
 pub(super) fn detach_private_root(root: &Path) {
+    #[cfg(test)]
+    super::persist::StagedHookGuard::pause_private_plan_cleanup(root);
     let (Some(parent), Some(name)) = (root.parent(), root.file_name()) else {
         return;
     };
