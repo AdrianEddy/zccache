@@ -556,11 +556,18 @@ impl KvStore {
     /// Concurrent puts after detachment create a fresh namespace.
     pub fn clear_namespace(&self, namespace: &str) -> KvResult<()> {
         let detached = self.detach_namespace_for(namespace, zccache_core::sync::STATE_TIMEOUT)?;
+        // The detach is the clear: the live namespace is already empty. A
+        // put racing the sweep can leave files in the retired tree; that
+        // tree stays durable retry work for `sweep_retired_namespaces_for`
+        // rather than failing a clear that has taken effect (#1648).
         let report = detached.sweep_for(zccache_core::wait::PROBE)?;
         if report.failures != 0 || report.deferred {
-            return Err(KvError::Io(std::io::Error::other(
-                "namespace detached; incomplete cleanup retained for recovery",
-            )));
+            tracing::debug!(
+                namespace,
+                failures = report.failures,
+                deferred = report.deferred,
+                "namespace cleared; retired tree retained for retry"
+            );
         }
         Ok(())
     }

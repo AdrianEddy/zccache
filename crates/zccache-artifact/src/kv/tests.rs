@@ -447,3 +447,39 @@ fn put_racing_clear_namespace_never_errors() {
     assert!(s.list_namespace("ns").unwrap().is_empty());
     assert_eq!(s.total_bytes().unwrap(), 0);
 }
+
+/// Restore owner write on every directory so the tempdir can be removed.
+#[cfg(unix)]
+fn make_tree_writable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if !path.is_dir() || path.is_symlink() {
+        return;
+    }
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        make_tree_writable(&entry.path());
+    }
+}
+
+// The detach is the clear (#1648, #1964): an unfinished sweep of the retired
+// tree, such as a racing put's file the sweep cannot unlink, stays retry work
+// and must not fail a clear that already emptied the live namespace.
+#[cfg(unix)]
+#[test]
+fn clear_namespace_succeeds_when_the_retired_tree_sweep_is_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let (d, s) = store();
+    let k = key_from(b"kept");
+    s.put("ns", &k, b"v").unwrap();
+    let stuck = d.path().join("kv").join("ns").join("stuck");
+    std::fs::create_dir(&stuck).unwrap();
+    std::fs::write(stuck.join("racing.tmp"), b"partial").unwrap();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let cleared = s.clear_namespace("ns");
+    make_tree_writable(d.path());
+
+    cleared.unwrap();
+    assert!(s.list_namespace("ns").unwrap().is_empty());
+    assert!(s.get("ns", &k).unwrap().is_none());
+}
