@@ -421,7 +421,10 @@ fn put_racing_clear_namespace_never_errors() {
                 scope.spawn(move || {
                     let mut errors = Vec::new();
                     let mut i = 0u32;
-                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    // Cap the writes: clears sweep outside the gate, so
+                    // unthrottled writers outpace each sweep until every
+                    // clear spends its full budget (100 x 30 s on CI).
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) && i < 2_000 {
                         let k = key_from(format!("race-{w}-{i}").as_bytes());
                         if let Err(e) = s.put("ns", &k, b"v") {
                             errors.push(e.to_string());
