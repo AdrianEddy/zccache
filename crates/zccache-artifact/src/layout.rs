@@ -320,6 +320,7 @@ pub(crate) fn copy_artifact_generation(
         if size != sizes[index] {
             return Err(invalid_data("snapshot payload changed size"));
         }
+        write_blob_digest_sidecar(&target, &digest_hex)?;
         outputs.push(StagedOutput {
             index,
             size,
@@ -380,8 +381,28 @@ fn copy_staged_generation(
         let copied = target.join(name);
         copy_snapshot_file(path, &copied)?;
     }
+    // Restart verification evicts a blob with no digest sidecar (#1947), so
+    // write each output's sidecar from the manifest digest the copy was
+    // verified against.
+    for (path, output) in paths.iter().zip(&generation.outputs) {
+        let name = path
+            .file_name()
+            .ok_or_else(|| invalid_data("staged output has no name"))?;
+        write_blob_digest_sidecar(&target.join(name), &output.digest_hex)?;
+    }
     publish_snapshot_pointer(destination, key, generation_name, sizes)?;
     Ok(true)
+}
+
+/// Write the raw-digest sidecar the daemon's restart verification reads for
+/// `blob`.
+fn write_blob_digest_sidecar(blob: &Path, digest_hex: &str) -> io::Result<()> {
+    let digest = kernal_api::hash::Blake3Digest::from_hex(digest_hex)
+        .map_err(|_| invalid_data("staged output digest is not hex"))?;
+    let sidecar = crate::blob_digest::sidecar_path(blob);
+    let mut file = fs::File::create(sidecar.as_path())?;
+    std::io::Write::write_all(&mut file, digest.as_bytes())?;
+    file.sync_all()
 }
 
 fn copy_snapshot_file(source: &Path, destination: &Path) -> io::Result<()> {

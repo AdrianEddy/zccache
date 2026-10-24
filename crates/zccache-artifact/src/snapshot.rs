@@ -613,4 +613,42 @@ mod tests {
         assert_eq!(fs::read(&payloads[0]).unwrap(), b"obj");
         assert_eq!(fs::read(&payloads[1]).unwrap(), b"depfile");
     }
+
+    #[test]
+    fn restored_outputs_carry_digest_sidecars_for_restart_verification() {
+        // zackees/zccache#1947: restart verification evicts a blob without
+        // its digest sidecar, so a restored snapshot must carry one per
+        // output for both staged copies and normalized legacy rows.
+        let (temp, store, staged_key) = fixture();
+        let artifacts = temp.path().join("source/artifacts");
+        let flat_key = "c".repeat(64);
+        fs::write(artifacts.join(format!("{flat_key}_0")), b"flat").unwrap();
+        store.insert(
+            &flat_key,
+            &ArtifactIndex::new(vec!["flat.o".into()], vec![4], vec![], vec![], 0),
+        );
+        let snapshot = temp.path().join("snapshot");
+        let compatibility = "b".repeat(64);
+        export_snapshot(&store, &artifacts, &compatibility, &snapshot).unwrap();
+        let restored = temp.path().join("restored");
+        import_snapshot(&snapshot, &compatibility, &restored).unwrap();
+        let index = ArtifactStore::open(&restored.join("index.bin")).unwrap();
+        for root in [snapshot.join("artifacts"), restored.join("artifacts")] {
+            for key in [&staged_key, &flat_key] {
+                let sizes = index.get(key).unwrap().output_sizes.clone();
+                for file in resolve_staged_artifact_files(&root, key, &sizes)
+                    .unwrap()
+                    .unwrap()
+                {
+                    let sidecar = crate::blob_digest::sidecar_path(&file);
+                    assert_eq!(
+                        fs::read(sidecar.as_path()).unwrap(),
+                        kernal_api::hash::blake3_bytes(&fs::read(&file).unwrap()).as_bytes(),
+                        "{} has no matching digest sidecar",
+                        file.display()
+                    );
+                }
+            }
+        }
+    }
 }
