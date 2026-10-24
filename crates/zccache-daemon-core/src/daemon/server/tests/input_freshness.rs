@@ -79,6 +79,17 @@ async fn fast_entry_checks_source_headers_force_includes_and_externs_without_eve
         let accepted_hits = graph.stats().hits;
         let edited: NormalizedPath = dir.path().join(changed).into();
         std::fs::write(&edited, b"new").unwrap();
+        // A later edit, not one in the same timestamp tick as the recorded
+        // hash: Windows file times can repeat across writes microseconds
+        // apart, and a same-size same-mtime rewrite is invisible to any stat
+        // check (zackees/zccache#1989).
+        kernal_api::platform::fs::set_file_mtime(
+            &edited,
+            kernal_api::platform::fs::FileTime::from_system_time(
+                std::time::SystemTime::now() + std::time::Duration::from_secs(10),
+            ),
+        )
+        .unwrap();
         assert!(!server
             .state
             .cache_system
