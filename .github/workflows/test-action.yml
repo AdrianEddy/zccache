@@ -419,7 +419,7 @@ jobs:
       # --- Unit tests always run ---
       - name: "zccache unit tests"
         shell: bash
-        run: cargo test -p zccache --lib --bins --features zccache-bin,daemon-bin,download-bin,download-daemon-bin,fingerprint-bin,stamp-bin,ci-bin,crash-tools,tokio-console,test-support -- --test-threads=1  # ci-lint: allow RUST-001 exercises the zccache action, which owns RUSTC_WRAPPER (CLAUDE.md exception)
+        run: cargo test -p zccache --lib --bins --features zccache-bin,daemon-bin,download-bin,download-daemon-bin,fingerprint-bin,stamp-bin,ci-bin,crash-tools,tokio-console,test-support -- --test-threads=1  # ci-lint: allow RUST-017 cargo test is one process and these lib tests set_var, Integration runs them parallel under nextest. ci-lint: allow RUST-001 exercises the zccache action, which owns RUSTC_WRAPPER (CLAUDE.md exception)
 
       # --- Test gha-cache status (works without cache API) ---
       - name: "gha-cache status: runs without error"
