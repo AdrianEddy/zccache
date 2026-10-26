@@ -49,6 +49,24 @@ suites    = ["lint", "check"]
 dylint    = "all-platforms"
 budget    = { critical-path = "12m" }
 
+# CACHE-026 (candidate, forge-ci/ci.yml AGENTS.md registry) -- MEASURED FREEZE.
+# From 2026-10-22 to at least 2026-10-26 every main push's cache-pre-prune.yml
+# failed closed with "projected peak 10240744545 exceeds transition target
+# 9200000000" (runs 39761957389 .. 40260098569). wait-cache-pre-prune then
+# exported ZCCACHE_CACHE_WRITES=false, so no main job saved anything, and the
+# whole cache (51 entries, 8.79 GB, all refs/heads/main) stayed pinned to
+# Cargo.lock f0b451a5... and soldr v0.9.38 while main moved to 24e5a458....
+# Why it cannot self-heal: planLockTransitionPrePrune keeps every old-lock
+# setup-soldr build cache (~3.6 GB linux) in currentBytes AND charges a full
+# new generation for it, and on overflow it deletes nothing (retireFirstIds
+# was empty), so the next push sees the identical inventory and fails again.
+# A guard that disables writes with no exit is the failure mode, not a safety
+# margin. Replaying the planner offline on the live inventory: deleting the
+# six old-lock linux build caches (keeping the newest, integration) forecasts
+# 6.69 GB (ok); the janitor's superseded-only deletions forecast 9.25 GB (still
+# over). Every large family below already carries `evict = "lru"` (CACHE-029),
+# which bounds steady state but not this lock-transition peak.
+#
 # `pre-prune = true` is a FACT here, not an aspiration: cache-pre-prune.yml runs
 # on every push to main and every lane job waits on its barrier
 # (wait-cache-pre-prune.yml) before it produces. That is what waives the
