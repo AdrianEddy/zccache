@@ -61,10 +61,12 @@ budget    = { critical-path = "12m" }
 # new generation for it, and on overflow it deletes nothing (retireFirstIds
 # was empty), so the next push sees the identical inventory and fails again.
 # A guard that disables writes with no exit is the failure mode, not a safety
-# margin. Replaying the planner offline on the live inventory: deleting the
-# six old-lock linux build caches (keeping the newest, integration) forecasts
-# 6.69 GB (ok); the janitor's superseded-only deletions forecast 9.25 GB (still
-# over). Every large family below already carries `evict = "lru"` (CACHE-029),
+# margin. Fixed by forge-ci/zccache#1996's follow-up: over target, the planner
+# now retires superseded old-lock build/cook caches oldest first (never a
+# current-lock entry) and re-forecasts; on the live inventory it retires 6 and
+# forecasts 8.78 GB (ok, ci/tests/test_cache_pre_prune_retire_first.py). It
+# fails (loudly, CACHE-026) only when retiring all of them still does not fit.
+# Every large family below already carries `evict = "lru"` (CACHE-029),
 # which bounds steady state but not this lock-transition peak.
 #
 # `pre-prune = true` is a FACT here, not an aspiration: cache-pre-prune.yml runs
