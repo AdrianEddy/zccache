@@ -418,6 +418,32 @@ fn a_driver_moving_from_its_compiler_to_its_assembler_is_making_progress() {
     ));
 }
 
+#[test]
+fn an_unavailable_session_sample_falls_back_to_the_tick_sample() {
+    // macOS: running-process reports no session CPU time. A silent child's
+    // constant tick total must still read as stalled, or it is never reaped.
+    assert!(!super::session::stall_cpu_advanced(
+        None,
+        None,
+        Some(7),
+        Some(7)
+    ));
+    assert!(super::session::stall_cpu_advanced(
+        None,
+        None,
+        Some(7),
+        Some(9)
+    ));
+    // Neither signal observable: never false-kill what cannot be measured.
+    assert!(super::session::stall_cpu_advanced(None, None, None, None));
+    assert!(super::session::stall_cpu_advanced(
+        None,
+        None,
+        Some(7),
+        None
+    ));
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn descendant_cpu_counts_a_busy_compiler_child_of_a_waiting_driver() {

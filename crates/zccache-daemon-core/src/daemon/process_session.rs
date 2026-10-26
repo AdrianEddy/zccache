@@ -674,17 +674,26 @@ fn live_tree_cpu_ticks(pid: u32) -> Option<u64> {
 /// live descendants: a driver that waits on its real compiler is not wedged.
 /// The live descendants' total drops when one exits (cc1plus hands over to
 /// `as`), so any change is progress; a wedged tree's total stays constant.
+///
+/// The identity-bound session sample is unavailable on some hosts (macOS:
+/// running-process reports `None` for every async child). Treating that as
+/// assumed progress while a PID tick sample *is* available meant a silent
+/// child was never reaped there. Fall back to the tick sample, which is the
+/// former watchdog's macOS signal; assume progress only when neither exists.
 pub(super) fn stall_cpu_advanced(
     previous: Option<std::time::Duration>,
     current: Option<std::time::Duration>,
     previous_tree: Option<u64>,
     current_tree: Option<u64>,
 ) -> bool {
-    session_cpu_time_advanced(previous, current)
-        || matches!(
-            (previous_tree, current_tree),
-            (Some(previous), Some(current)) if current != previous
-        )
+    let tree = match (previous_tree, current_tree) {
+        (Some(previous), Some(current)) => Some(current != previous),
+        _ => None,
+    };
+    match tree {
+        Some(tree_advanced) if previous.is_none() || current.is_none() => tree_advanced,
+        _ => session_cpu_time_advanced(previous, current) || tree == Some(true),
+    }
 }
 
 /// Match the former watchdog's conservative platform policy: unavailable
