@@ -19,7 +19,9 @@ setup-steps = ["Wait for current-main cache pre-prune"]
 verify = "ci.yml:ci-mode"
 # The cache pre-prune barrier is main-push cache plumbing that every job
 # already waits on; it runs beside ci-mode rather than after it.
-verify-exempt = ["cache-pre-prune"]
+# cancel-superseded (GEN-022, ci.yml#409) runs only on merge_group and must
+# run first, with no `needs:`.
+verify-exempt = ["cache-pre-prune", "cancel-superseded"]
 # Shadow: an unattested PR head is reported by ci-mode, not failed, so a
 # contributor who has not adopted the gate still gets the full remote run.
 # Promote to "enforce" once `ci-lint local-gate first-pass` shows attested

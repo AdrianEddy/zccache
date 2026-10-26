@@ -27,6 +27,11 @@ on:
       - ".gitattributes"
       - ".editorconfig"
       - "tasks/**"
+  # GEN-022 (forge-ci/ci.yml#405/#432): main merges through a merge queue,
+  # which validates the exact merge commit. paths-ignore does not apply to
+  # merge_group, so every queued PR runs the gate.
+  merge_group:
+    types: [checks_requested]
 
 # Auto-cancel superseded PR runs: pushing again to a feature branch
 # supersedes the in-flight run instead of queueing behind it. Non-PR events
@@ -48,6 +53,28 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # GEN-022 / forge-ci/ci.yml#409: a queue ref carries the base commit
+  # (gh-readonly-queue/main/pr-<N>-<sha>), so the concurrency group above never
+  # pairs a PR's rebuilt queue run with the one main's movement replaced; this
+  # cancels the older one. No `needs:`; only the cache janitor depends on it.
+  cancel-superseded:
+    name: Cancel superseded queue runs
+    if: ${{ !cancelled() && github.event_name == 'merge_group' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Cancel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m ci.cancel_superseded
+
   # zackees/ci.yml#166/#190/#198 (GATE-002/003/008/010): decides, from the
   # PR base's local-gate.toml and ci-attestations.yml, whether this PR head
   # carries a valid local-gate attestation for every gate of a skippable
@@ -465,3 +492,39 @@ jobs:
           CARGO_BUILD_JOBS: "1"
           SOLDR_JOBS: "1"
         run: soldr cargo test -p zccache-daemon-core --features test-support --lib miss_overhead_budget -- --ignored --nocapture  # ci-lint: allow RUST-017 one budget probe, prints the measured overhead
+
+  # GEN-022 (forge-ci/ci.yml#405): every queue run and main push ends with the
+  # ci-lint cache janitor. It runs after every other job, even failed ones, so
+  # the repository stays under [cache].budget by our LRU order instead of
+  # GitHub's, which can evict a seed a required job restores. The queue
+  # serializes default-branch cache writes; the non-cancelling group keeps one
+  # sweep at a time across runs.
+  cache-janitor:
+    name: Cache janitor
+    needs: [cancel-superseded, ci-mode, cache-pre-prune, fmt, dylint, msrv, reflink-e2e, docs, miss-overhead]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: cache-janitor
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: zackees/ci.yml
+          ref: 41fcbca60a7901c8707411c4abf4d0b41dd71426
+          path: .ci-lint
+          persist-credentials: false
+          sparse-checkout: ci_lint
+      - name: Evict down to the cache budget
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: .ci-lint
+        run: python3 -m ci_lint cache janitor --repo .

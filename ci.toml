@@ -220,10 +220,13 @@ cache  = "machine"
 
 # ── Allowlists ────────────────────────────────────────────────────────────────
 [allow]
-workflows = { "ci.yml" = ["push:main", "pull_request"], "ci-linux.yml" = ["push:main", "workflow_dispatch"], "ci-macos.yml" = ["push:main"], "ci-windows.yml" = ["push:main"], "ci-check.yml" = ["workflow_call"], "ci-check-cross.yml" = ["workflow_call"], "integration.yml" = ["push:main", "schedule", "workflow_dispatch"], "python-tests.yml" = ["push:main", "pull_request"], "clippy.yml" = ["push:main"], "coverage.yml" = ["push:main"], "wrapper-e2e.yml" = ["push:main"], "release-auto.yml" = ["push:main", "push:tags", "workflow_dispatch"], "cache-pre-prune.yml" = ["push:main"], "wait-cache-pre-prune.yml" = ["workflow_call"], "reflink-e2e.yml" = ["workflow_call"], "cache-budget.yml" = ["schedule", "workflow_dispatch"], "cache-cleanup.yml" = ["schedule", "workflow_dispatch"] }
+workflows = { "ci.yml" = ["push:main", "pull_request", "merge_group"], "ci-linux.yml" = ["push:main", "workflow_dispatch"], "ci-macos.yml" = ["push:main"], "ci-windows.yml" = ["push:main"], "ci-check.yml" = ["workflow_call"], "ci-check-cross.yml" = ["workflow_call"], "integration.yml" = ["push:main", "schedule", "workflow_dispatch"], "python-tests.yml" = ["push:main", "pull_request"], "clippy.yml" = ["push:main"], "coverage.yml" = ["push:main"], "wrapper-e2e.yml" = ["push:main"], "release-auto.yml" = ["push:main", "push:tags", "workflow_dispatch"], "cache-pre-prune.yml" = ["push:main"], "wait-cache-pre-prune.yml" = ["workflow_call"], "reflink-e2e.yml" = ["workflow_call"], "cache-budget.yml" = ["schedule", "workflow_dispatch"], "cache-cleanup.yml" = ["schedule", "workflow_dispatch"] }
 actions = ["actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/github-script", "zackees/setup-soldr", "astral-sh/setup-uv", "mozilla-actions/sccache-action"]
 tools = ["soldr", "uv", "python3", "git"]
 secrets = []
+# Jobs granted `actions: write` (SEC-002): msrv evicts its cache; the merge
+# queue's cancel-superseded and cache-janitor jobs (GEN-022, ci.yml#409/#405).
+permissions = { "actions: write" = ["msrv", "cancel-superseded", "cache-janitor"] }
 
 # LAYOUT-001's one allowed platform-selector file, plus the other `platform.rs`
 # modules zccache's OS branching is split across.
