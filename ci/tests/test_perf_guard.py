@@ -959,7 +959,7 @@ def test_perf_workflow_has_dedicated_cow_materialization_gate():
     assert "name: COW materialization hit budget" in job
     assert (
         "soldr cargo test -p zccache-daemon-core "
-        "--features test-support "
+        "--features test-support --lib "
         "perf_cow_materialization_128_hits_under_two_seconds" in job
     )
     assert "--no-cache" not in job + build_job + speed_floor_job
