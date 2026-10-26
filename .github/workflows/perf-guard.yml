@@ -72,7 +72,18 @@ jobs:
           SOLDR_JOBS: "1"
         run: |
           set -euo pipefail
-          soldr cargo test -p zccache-daemon-core --features test-support perf_cow_materialization_128_hits_under_two_seconds
+          # #1500 renamed the timing test to this exact-count test; the old
+          # filter matched nothing and the step passed while running 0 tests.
+          # --exact pins the full path, and the grep fails the step unless
+          # libtest actually ran exactly that one test.
+          log="$RUNNER_TEMP/cow-materialization.log"
+          soldr cargo test -p zccache-daemon-core --features test-support --lib -- \
+            --exact daemon::server::persist::tests::cow_materialization_probes_the_volume_once_not_per_delivery \
+            2>&1 | tee "$log"
+          if ! grep -Eq 'test result: ok\. 1 passed' "$log"; then
+            echo "::error::COW materialization budget ran no test (filter matched nothing)"
+            exit 1
+          fi
 
   build-perf-benchmark:
     name: Build perf benchmark binary
