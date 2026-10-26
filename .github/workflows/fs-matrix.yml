@@ -124,8 +124,8 @@ jobs:
           CARGO_BUILD_JOBS: "1"
           SOLDR_JOBS: "1"
         run: >-
-          soldr cargo test -p zccache-daemon-core --features test-support
-          filesystem_materialization_matrix_prints_loud_summary -- --nocapture --test-threads=1
+          soldr cargo test -p zccache-daemon-core --features test-support --lib
+          filesystem_materialization_matrix_prints_loud_summary -- --nocapture --test-threads=1  # ci-lint: allow RUST-017 one named acceptance test, its printed summary is the evidence
       - name: ReFS cluster-rounding acceptance
         if: runner.os == 'Windows'
         shell: bash
@@ -136,8 +136,8 @@ jobs:
           CARGO_BUILD_JOBS: "1"
           SOLDR_JOBS: "1"
         run: >-
-          soldr cargo test -p zccache-daemon-core --features test-support
-          refs_non_cluster_multiple_round_trips -- --nocapture --test-threads=1
+          soldr cargo test -p zccache-daemon-core --features test-support --lib
+          refs_non_cluster_multiple_round_trips -- --nocapture --test-threads=1  # ci-lint: allow RUST-017 one named acceptance test, its printed summary is the evidence
 
   observe-macos-queue:
     name: Observe macOS runner queue
@@ -192,5 +192,5 @@ jobs:
           CARGO_BUILD_JOBS: "1"
           SOLDR_JOBS: "1"
         run: >-
-          soldr cargo test -p zccache-daemon-core --features test-support
-          reflink_larger_than_four_gib_uses_chunked_clone -- --nocapture --test-threads=1
+          soldr cargo test -p zccache-daemon-core --features test-support --lib
+          reflink_larger_than_four_gib_uses_chunked_clone -- --nocapture --test-threads=1  # ci-lint: allow RUST-017 one named acceptance test, its printed summary is the evidence

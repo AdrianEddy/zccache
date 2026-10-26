@@ -58,7 +58,7 @@ jobs:
           ZCCACHE_REQUIRE_REFLINK_E2E: "1"
         run: >-
           soldr cargo test -p zccache --features test-support --test cache_rust
-          -- --ignored reflink_e2e --nocapture --test-threads=1
+          -- --ignored reflink_e2e --nocapture --test-threads=1  # ci-lint: allow RUST-017 btrfs reflink e2e probe, printed clone stats are the evidence
       - name: Mode, store, accounting and COPY-block tests on btrfs
         env:
           TMPDIR: ${{ runner.temp }}/btrfs

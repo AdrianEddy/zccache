@@ -72,7 +72,7 @@ jobs:
           SOLDR_JOBS: "1"
         run: |
           set -euo pipefail
-          soldr cargo test -p zccache-daemon-core --features test-support perf_cow_materialization_128_hits_under_two_seconds
+          soldr cargo test -p zccache-daemon-core --features test-support --lib perf_cow_materialization_128_hits_under_two_seconds
 
   build-perf-benchmark:
     name: Build perf benchmark binary

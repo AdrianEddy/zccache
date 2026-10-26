@@ -216,7 +216,7 @@ jobs:
           export PATH="$PCH_TEST_TOOLS:$PATH"
           clang++ --version
           ninja --version
-          soldr cargo nextest run --workspace --features "$ZCCACHE_INTEGRATION_FEATURES" --no-fail-fast -E 'test(/daemon_pch_strict_replay_test|pch_inputs::|pch_provenance::/)'
+          soldr cargo nextest run --workspace --features "$ZCCACHE_INTEGRATION_FEATURES" --no-fail-fast -E 'test(/daemon_pch_strict_replay_test|pch_inputs::|pch_provenance::/)'  # ci-lint: allow RUST-015 the --no-run prebuild above already compiled every workspace test target
       - name: Test (full workspace)
         shell: bash
         env:
@@ -314,7 +314,7 @@ jobs:
           ZCCACHE_DISABLE: "1"
         run: |
           unset ZCCACHE_CACHE_DIR
-          soldr cargo test -p zccache-daemon-core --test legacy_path_validation -- --ignored --test-threads=1
+          soldr cargo test -p zccache-daemon-core --test legacy_path_validation -- --ignored
       - name: Test ignored integration and stress suite
         if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         shell: bash
