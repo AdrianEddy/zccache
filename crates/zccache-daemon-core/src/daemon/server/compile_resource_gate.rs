@@ -62,7 +62,8 @@ impl<'a> HostCompilerRequest<'a> {
 }
 
 /// A host policy could not classify an otherwise valid compiler request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
 pub struct HostAdmissionError(String);
 
 impl HostAdmissionError {
@@ -71,14 +72,6 @@ impl HostAdmissionError {
         Self(message.into())
     }
 }
-
-impl std::fmt::Display for HostAdmissionError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for HostAdmissionError {}
 
 /// Optional embedded-host classification layered onto zccache's own policy.
 ///
