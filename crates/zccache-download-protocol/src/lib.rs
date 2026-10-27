@@ -16,14 +16,35 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// Errors produced while framing or decoding download daemon messages.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ProtocolError {
     /// The bincode payload could not be serialized or decoded.
-    #[error("{0}")]
-    Bincode(#[source] bincode::Error),
+    Bincode(bincode::Error),
     /// A peer announced, or an encoder produced, a payload beyond the cap.
-    #[error("download protocol message too large: {size} bytes (max {max})")]
     MessageTooLarge { size: usize, max: usize },
+}
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bincode(error) => error.fmt(formatter),
+            Self::MessageTooLarge { size, max } => {
+                write!(
+                    formatter,
+                    "download protocol message too large: {size} bytes (max {max})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Bincode(error) => Some(error.as_ref()),
+            Self::MessageTooLarge { .. } => None,
+        }
+    }
 }
 
 impl From<bincode::Error> for ProtocolError {

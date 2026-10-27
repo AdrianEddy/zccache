@@ -4150,7 +4150,6 @@ dependencies = [
  "kernal-api",
  "serde",
  "tempfile",
- "thiserror",
  "zccache-core",
  "zccache-download",
 ]
