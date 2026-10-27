@@ -135,6 +135,11 @@ pub(crate) mod fs {
         };
     }
 
+    /// Windows antivirus/indexer scan windows (#490, #1757): an access-denied
+    /// (5) or sharing-violation (32) failure that may clear when retried.
+    /// Always `false` on Linux and macOS.
+    pub(crate) use kernal_api::platform::fs::replacement::is_transient_share_error;
+
     pub(crate) mod volume {
         pub(crate) use kernal_api::platform::fs::{
             allocated_bytes, file_id_width, volume_identity_u128,
