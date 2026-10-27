@@ -16,35 +16,14 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// Errors produced while framing or decoding download daemon messages.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {
     /// The bincode payload could not be serialized or decoded.
-    Bincode(bincode::Error),
+    #[error("{0}")]
+    Bincode(#[source] bincode::Error),
     /// A peer announced, or an encoder produced, a payload beyond the cap.
+    #[error("download protocol message too large: {size} bytes (max {max})")]
     MessageTooLarge { size: usize, max: usize },
-}
-
-impl std::fmt::Display for ProtocolError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Bincode(error) => error.fmt(formatter),
-            Self::MessageTooLarge { size, max } => {
-                write!(
-                    formatter,
-                    "download protocol message too large: {size} bytes (max {max})"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ProtocolError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Bincode(error) => Some(error.as_ref()),
-            Self::MessageTooLarge { .. } => None,
-        }
-    }
 }
 
 impl From<bincode::Error> for ProtocolError {
@@ -133,6 +112,20 @@ fn ensure_message_size(size: usize) -> Result<(), ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn bincode_error_keeps_its_error_kind_as_source() {
+        let error = ProtocolError::Bincode(Box::new(bincode::ErrorKind::Custom("bad".into())));
+        assert!(error
+            .source()
+            .unwrap()
+            .downcast_ref::<bincode::ErrorKind>()
+            .is_some());
+        assert!(ProtocolError::MessageTooLarge { size: 2, max: 1 }
+            .source()
+            .is_none());
+    }
 
     #[test]
     fn exact_limit_payload_encodes_and_decodes() {

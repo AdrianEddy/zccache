@@ -16,15 +16,9 @@ pub const STATE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// A synchronization operation could not acquire its resource in time.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("synchronization acquisition exceeded {0:?}")]
 pub struct LockTimeout(pub Duration);
-
-impl std::fmt::Display for LockTimeout {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "synchronization acquisition exceeded {:?}", self.0)
-    }
-}
-impl std::error::Error for LockTimeout {}
 
 /// Data shared by async tasks; no API exposes the mutex or its guard.
 #[derive(Debug)]

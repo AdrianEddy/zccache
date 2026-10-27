@@ -136,22 +136,11 @@ impl StagedPublishFailure {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
 struct StagedPublishError {
     reason: StagedPublishFailure,
     source: io::Error,
-}
-
-impl std::fmt::Display for StagedPublishError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.source.fmt(formatter)
-    }
-}
-
-impl std::error::Error for StagedPublishError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 fn publish_error(reason: StagedPublishFailure, source: io::Error) -> io::Error {
