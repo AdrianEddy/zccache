@@ -39,7 +39,6 @@ crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_overlay_aliases.
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_overlay.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/compile_exec.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/store_outcome.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/store_outcome_scan.rs
 crates/zccache-daemon-core/src/daemon/server/handle_exec_key.rs
 crates/zccache-daemon-core/src/daemon/server/handle_exec.rs
@@ -61,7 +60,6 @@ crates/zccache-daemon-core/src/daemon/server/persist/staged_store/root_safety.rs
 crates/zccache-daemon-core/src/daemon/server/persist/staged_store.rs
 crates/zccache-daemon-core/src/daemon/server/persist/write_cached.rs
 crates/zccache-daemon-core/src/daemon/server/run.rs
-crates/zccache-daemon-core/src/daemon/server/rustc.rs
 crates/zccache-daemon-core/src/daemon/server/staging_root.rs
 crates/zccache-daemon-core/src/daemon/side_effect.rs
 crates/zccache-daemon-core/src/daemon/trampoline.rs
@@ -74,7 +72,6 @@ crates/zccache-download-protocol/src/daemon_mgmt.rs
 crates/zccache-download/src/lib.rs
 crates/zccache-fingerprint/src/file_lock.rs
 crates/zccache-fingerprint/src/hash_cache.rs
-crates/zccache-fingerprint/src/mtime_replay/mod.rs
 crates/zccache-fingerprint/src/pch_inputs/mod.rs
 crates/zccache-fingerprint/src/pch_inputs/overlay.rs
 crates/zccache-fingerprint/src/persist.rs
