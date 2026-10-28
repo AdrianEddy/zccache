@@ -3971,6 +3971,7 @@ dependencies = [
 name = "zccache-audit"
 version = "1.15.8"
 dependencies = [
+ "kernal-api",
  "serde",
  "serde_json",
  "tempfile",

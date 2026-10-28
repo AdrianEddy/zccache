@@ -11,8 +11,6 @@ crates/zccache-artifact/src/rust_plan/manifest.rs
 crates/zccache-artifact/src/snapshot.rs
 crates/zccache-artifact/src/staged_lock.rs
 crates/zccache-artifact/src/store.rs
-crates/zccache-audit/src/log_audit.rs
-crates/zccache-compiler/src/arduino.rs
 crates/zccache-compiler/src/response_file.rs
 crates/zccache-compile-trace/src/lib.rs
 crates/zccache-core/src/config/cleanup.rs
@@ -29,7 +27,6 @@ crates/zccache-daemon-core/src/daemon/compile_journal/log_io.rs
 crates/zccache-daemon-core/src/daemon/crash.rs
 crates/zccache-daemon-core/src/daemon/fingerprint/verify.rs
 crates/zccache-daemon-core/src/daemon/server/cached_artifact.rs
-crates/zccache-daemon-core/src/daemon/server/compile_resource_gate.rs
 crates/zccache-daemon-core/src/daemon/server/compiler_hash.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance_retired.rs
 crates/zccache-daemon-core/src/daemon/server/disk_maintenance.rs
@@ -44,11 +41,9 @@ crates/zccache-daemon-core/src/daemon/server/handle_compile/pch_provenance.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/compile_exec.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/store_outcome.rs
 crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/store_outcome_scan.rs
-crates/zccache-daemon-core/src/daemon/server/handle_compile/pipeline/time_macros.rs
 crates/zccache-daemon-core/src/daemon/server/handle_exec_key.rs
 crates/zccache-daemon-core/src/daemon/server/handle_exec.rs
 crates/zccache-daemon-core/src/daemon/server/handle_link.rs
-crates/zccache-daemon-core/src/daemon/server/lifecycle.rs
 crates/zccache-daemon-core/src/daemon/server/out_dir.rs
 crates/zccache-daemon-core/src/daemon/server/persist/artifact_io.rs
 crates/zccache-daemon-core/src/daemon/server/persist/directory_bundle.rs
@@ -72,7 +67,6 @@ crates/zccache-daemon-core/src/daemon/side_effect.rs
 crates/zccache-daemon-core/src/daemon/trampoline.rs
 crates/zccache-depgraph/src/args.rs
 crates/zccache-depgraph/src/header_trace.rs
-crates/zccache-depgraph/src/scanner.rs
 crates/zccache-depgraph/src/snapshot/persistence.rs
 crates/zccache-depgraph/src/snapshot/quarantine.rs
 crates/zccache-depgraph/src/system_includes.rs
