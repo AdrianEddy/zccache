@@ -67,7 +67,8 @@ heap-profile = ["kernal-api/allocator"]
 # re-exported `MiMalloc` exposes the exact allocator counters. soldr reads
 # `prof::stats()` / `prof::dump_file`, which `kernal_api::allocator` does not
 # expose, so this one feature still names the crate directly; its pin matches
-# kernal-api's own `mimalloc-pprof` pin so both resolve to one allocator.
+# kernal-api's own `mimalloc-pprof` pin so both resolve to one allocator;
+# that pin is `=1.1.0` from kernal-api 0.1.33 on, so this moves with it.
 mimalloc-allocator = ["dep:mimalloc-pprof"]
 # The release binary hosts both daemons behind argv[0] dispatch. The legacy
 # daemon [[bin]] features remain available as source-build/test shims.
@@ -197,8 +198,9 @@ tracing-subscriber = { workspace = true, optional = true }
 # clang-cl does not declare, so the cargo-xwin `aarch64-pc-windows-msvc`
 # release lane cannot build them. That choice is package-scoped, so it can
 # only be made by whoever declares the dependency -- which is now kernal-api,
-# and it pins `=0.9.4`. If that pin ever regresses below 0.9.3 the aarch64
-# Windows release lane breaks here, so it is a facade-side constraint now.
+# and it pins `=1.1.0` from 0.1.33 on. If that pin ever regresses below 0.9.3
+# the aarch64 Windows release lane breaks here, so it is a facade-side
+# constraint now.
 # The crates.io package amalgamates the internal facade crates below into this
 # crate, so this dependency must carry the union of their kernal-api surfaces.
 # Workspace feature unification masks missing entries during ordinary builds;
@@ -216,8 +218,8 @@ kernal-api = { workspace = true, features = [
     "ipc-async",
 ] }
 # Only for the `mimalloc-allocator` re-export (soldr#3053); pinned to the same
-# exact version kernal-api declares so the graph holds one mimalloc.
-mimalloc-pprof = { version = "=0.9.4", optional = true }
+# exact version kernal-api 0.1.33 declares so the graph holds one mimalloc.
+mimalloc-pprof = { version = "=1.1.0", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
